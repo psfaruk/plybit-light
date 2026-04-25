@@ -1,0 +1,43 @@
+@keyframes pulse-green {
+  0%, 100% { box-shadow: 0 0 10px #00ff8840, 0 0 30px #00ff8820; }
+  50%       { box-shadow: 0 0 30px #00ff8880, 0 0 60px #00ff8840; }
+}
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 10px #ff2d6b40, 0 0 30px #ff2d6b20; }
+  50%       { box-shadow: 0 0 30px #ff2d6b80, 0 0 60px #ff2d6b40; }
+}
+@keyframes scan-bar {
+  0%   { transform: translateX(-100%); opacity: 0.4; }
+  50%  { opacity: 1; }
+  100% { transform: translateX(100%);  opacity: 0.4; }
+}
+@keyframes blink-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+@keyframes count-down {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: 283; }
+}
+@keyframes ticker-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes rotate-ring {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.anim-pulse-green { animation: pulse-green 2s ease-in-out infinite; }
+.anim-pulse-red   { animation: pulse-red   2s ease-in-out infinite; }
+.anim-blink       { animation: blink-dot   1s ease-in-out infinite; }
+.anim-fade-up     { animation: fade-in-up  0.4s ease forwards; }
+.anim-slide-right { animation: slide-in-right 0.3s ease forwards; }

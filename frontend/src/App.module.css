@@ -1,0 +1,112 @@
+.root {
+  display:        flex;
+  flex-direction: column;
+  height:         100vh;
+  background:     var(--bg-void);
+  overflow:       hidden;
+}
+
+/* ── Header ── */
+.header {
+  height:          52px;
+  background:      var(--bg-surface);
+  border-bottom:   1px solid rgba(255,255,255,0.05);
+  display:         flex;
+  align-items:     center;
+  padding:         0 var(--sp-4);
+  gap:             var(--sp-4);
+  flex-shrink:     0;
+}
+.logo {
+  display:       flex;
+  align-items:   center;
+  gap:           var(--sp-2);
+}
+.logoIcon { font-size: 18px; }
+.logoText {
+  font-family:   var(--font-display);
+  font-size:     14px;
+  font-weight:   700;
+  letter-spacing:3px;
+  color:         var(--blue-neon);
+  text-shadow:   var(--shadow-blue);
+}
+.headerCenter {
+  display:       flex;
+  align-items:   center;
+  gap:           var(--sp-3);
+  flex:          1;
+}
+.pairLabel {
+  font-family:   var(--font-display);
+  font-size:     12px;
+  letter-spacing:2px;
+  color:         var(--white-soft);
+}
+.headerRight {
+  display:       flex;
+  align-items:   center;
+  gap:           var(--sp-2);
+  margin-left:   auto;
+}
+.liveDot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+}
+.live    { background: var(--green-neon); box-shadow: var(--shadow-green); animation: blink-dot 1.5s ease-in-out infinite; }
+.offline { background: var(--muted); }
+.liveLabel {
+  font-family:   var(--font-display);
+  font-size:     9px;
+  letter-spacing:2px;
+  color:         var(--muted);
+}
+.accuracyBadge {
+  font-family:   var(--font-data);
+  font-size:     10px;
+  color:         var(--gold-neon);
+  background:    rgba(255,215,0,0.08);
+  padding:       2px 8px;
+  border-radius: var(--radius-sm);
+}
+
+/* ── TF bar ── */
+.tfBar {
+  height:        40px;
+  background:    var(--bg-surface);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  display:       flex;
+  align-items:   center;
+  padding:       0 var(--sp-4);
+  flex-shrink:   0;
+}
+
+/* ── Main layout ── */
+.main {
+  flex:           1;
+  display:        grid;
+  grid-template-columns: 1fr 340px;
+  overflow:       hidden;
+}
+.chartSection {
+  border-right:  1px solid rgba(255,255,255,0.05);
+  overflow:      hidden;
+  position:      relative;
+}
+.sidebar {
+  display:       flex;
+  flex-direction:column;
+  gap:           var(--sp-2);
+  padding:       var(--sp-3);
+  overflow-y:    auto;
+  background:    var(--bg-base);
+}
+.signalWrap { flex-shrink: 0; }
+.windowWrap { flex-shrink: 0; }
+.modelWrap  { flex: 1; min-height: 0; overflow: hidden; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .main { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+}

@@ -1,0 +1,29 @@
+.bar {
+  height:        36px;
+  background:    var(--bg-surface);
+  border-top:    1px solid rgba(255,255,255,0.05);
+  display:       flex;
+  align-items:   center;
+  overflow:      hidden;
+  flex-shrink:   0;
+}
+.ticker {
+  display:       flex;
+  align-items:   center;
+  gap:           var(--sp-6);
+  padding:       0 var(--sp-4);
+  white-space:   nowrap;
+}
+.item { display: flex; gap: var(--sp-2); align-items: center; }
+.sym {
+  font-family:   var(--font-display);
+  font-size:     10px;
+  letter-spacing:1px;
+  color:         var(--muted);
+}
+.price {
+  font-family:   var(--font-data);
+  font-size:     13px;
+  color:         var(--blue-neon);
+  font-weight:   600;
+}

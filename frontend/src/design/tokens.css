@@ -1,0 +1,62 @@
+:root {
+  /* Backgrounds */
+  --bg-void:     #030508;
+  --bg-base:     #080d14;
+  --bg-surface:  #0d1520;
+  --bg-elevated: #121d2e;
+  --bg-glass:    rgba(8, 20, 38, 0.85);
+
+  /* Signal Colors */
+  --green-neon:  #00ff88;
+  --green-glow:  #00ff8840;
+  --green-dim:   #00cc66;
+  --red-neon:    #ff2d6b;
+  --red-glow:    #ff2d6b40;
+  --red-dim:     #cc1144;
+
+  /* Accents */
+  --gold-neon:   #ffd700;
+  --blue-neon:   #00b4ff;
+  --purple-neon: #b347ff;
+  --cyan-neon:   #00f5ff;
+  --orange-neon: #ff7b00;
+  --white-soft:  #e0eaff;
+  --muted:       #4a607a;
+
+  /* Typography */
+  --font-display: 'Orbitron', monospace;
+  --font-data:    'JetBrains Mono', monospace;
+  --font-body:    'Sora', sans-serif;
+
+  /* Shadows / glows */
+  --shadow-green:  0 0 20px #00ff8860, 0 0 40px #00ff8820;
+  --shadow-red:    0 0 20px #ff2d6b60, 0 0 40px #ff2d6b20;
+  --shadow-gold:   0 0 16px #ffd70060;
+  --shadow-blue:   0 0 16px #00b4ff60;
+  --glass-blur:    20px;
+
+  /* Spacing scale */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;
+  --sp-4: 16px; --sp-5: 20px; --sp-6: 24px;
+
+  /* Border radius */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg-void);
+  color: var(--white-soft);
+  font-family: var(--font-body);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 4px; }

@@ -1,0 +1,64 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  go-streamer:
+    build:
+      context: ./go-streamer
+      dockerfile: Dockerfile
+    environment:
+      DERIVE_APP_ID: ${DERIVE_APP_ID:-114229}
+      DERIVE_TOKEN: ${DERIVE_TOKEN:-e2hm1s0aGzXO83I}
+      REDIS_URL: redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: on-failure
+
+  python-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8003"
+    environment:
+      REDIS_URL: redis://redis:6379
+      DERIVE_APP_ID: ${DERIVE_APP_ID:-114229}
+      DERIVE_TOKEN: ${DERIVE_TOKEN:-e2hm1s0aGzXO83I}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: on-failure
+    volumes:
+      - ./backend/models:/app/models
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - python-backend
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - python-backend
+      - frontend

@@ -1,0 +1,58 @@
+.panel {
+  background:    var(--bg-glass);
+  border:        1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius-md);
+  padding:       var(--sp-3) var(--sp-4);
+  display:       flex;
+  flex-direction:column;
+  gap:           var(--sp-2);
+}
+.header {
+  font-family:   var(--font-display);
+  font-size:     9px;
+  letter-spacing:2px;
+  color:         var(--muted);
+  margin-bottom: 2px;
+}
+.row {
+  display:       flex;
+  align-items:   center;
+  gap:           var(--sp-2);
+}
+.time {
+  font-family:   var(--font-data);
+  font-size:     12px;
+  color:         var(--muted);
+  width:         50px;
+}
+.dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  flex-shrink:   0;
+}
+.dir {
+  font-family:   var(--font-display);
+  font-size:     10px;
+  letter-spacing:1px;
+  width:         44px;
+}
+.conf {
+  font-family:   var(--font-data);
+  font-size:     11px;
+  color:         var(--white-soft);
+}
+.grade {
+  font-family:   var(--font-display);
+  font-size:     9px;
+  color:         var(--gold-neon);
+  margin-left:   auto;
+}
+.nowBadge {
+  font-family:   var(--font-display);
+  font-size:     8px;
+  letter-spacing:1px;
+  background:    rgba(0,255,136,0.15);
+  color:         var(--green-neon);
+  padding:       1px 6px;
+  border-radius: 4px;
+}

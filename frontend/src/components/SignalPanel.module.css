@@ -1,0 +1,174 @@
+.panel {
+  background:    var(--bg-glass);
+  backdrop-filter: blur(20px);
+  border:        1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius-md);
+  padding:       var(--sp-4);
+  display:       flex;
+  flex-direction:column;
+  gap:           var(--sp-3);
+  height:        100%;
+  overflow-y:    auto;
+}
+.waiting {
+  align-items:   center;
+  justify-content:center;
+  min-height:    200px;
+}
+.waitingDot {
+  width:  12px; height: 12px;
+  border-radius: 50%;
+  background: var(--blue-neon);
+  animation: blink-dot 1s ease-in-out infinite;
+}
+.waitingText {
+  font-family: var(--font-display);
+  font-size:   11px;
+  letter-spacing: 2px;
+  color:       var(--muted);
+  margin-top:  var(--sp-2);
+}
+.trainingBadge {
+  font-size:   11px;
+  color:       var(--orange-neon);
+  margin-top:  var(--sp-2);
+}
+.direction {
+  display:      flex;
+  align-items:  baseline;
+  gap:          var(--sp-2);
+}
+.directionArrow {
+  font-size:    32px;
+  line-height:  1;
+}
+.directionLabel {
+  font-family:  var(--font-display);
+  font-size:    28px;
+  font-weight:  900;
+  letter-spacing: 3px;
+}
+.directionSub {
+  font-size:    11px;
+  color:        var(--muted);
+  font-family:  var(--font-display);
+  letter-spacing: 1px;
+}
+.gradeRow {
+  display:      flex;
+  align-items:  center;
+  gap:          var(--sp-2);
+}
+.gradeIcon { font-size: 18px; }
+.gradeLabel {
+  font-family:  var(--font-display);
+  font-size:    13px;
+  letter-spacing: 2px;
+}
+.timer {
+  margin-left: auto;
+  position:    relative;
+  width:       44px; height: 44px;
+}
+.timerLabel {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-display);
+  font-size:   10px;
+  color:       var(--green-neon);
+}
+.confBar {
+  position:    relative;
+  height:      6px;
+  background:  var(--bg-elevated);
+  border-radius: 3px;
+  overflow:    hidden;
+}
+.confFill {
+  height: 100%;
+  border-radius: 3px;
+  transition:  width 0.5s ease;
+}
+.confLabel {
+  position:    absolute;
+  right:       0; top: -18px;
+  font-family: var(--font-data);
+  font-size:   11px;
+  color:       var(--white-soft);
+}
+.tradeInfo {
+  display:     flex;
+  justify-content: space-between;
+  font-size:   12px;
+  color:       var(--muted);
+}
+.delay { color: var(--orange-neon); font-family: var(--font-data); }
+.section {
+  border-top:  1px solid rgba(255,255,255,0.04);
+  padding-top: var(--sp-2);
+  display:     flex;
+  flex-direction: column;
+  gap:         var(--sp-2);
+}
+.sectionLabel {
+  font-family: var(--font-display);
+  font-size:   9px;
+  letter-spacing: 1.5px;
+  color:       var(--muted);
+}
+.tfRow { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.tfBadge {
+  font-family:   var(--font-display);
+  font-size:     10px;
+  letter-spacing: 1px;
+  background:    var(--bg-elevated);
+  padding:       2px 8px;
+  border-radius: var(--radius-sm);
+}
+.kzBadge {
+  font-family: var(--font-display);
+  font-size:   9px;
+  letter-spacing: 1px;
+  color:       var(--gold-neon);
+}
+.reactionRow { display: flex; flex-direction: column; gap: 4px; }
+.reactionRow > div { display: flex; align-items: center; gap: var(--sp-2); }
+.reactionLabel {
+  font-family: var(--font-data);
+  font-size:   10px;
+  width:       28px;
+  color:       var(--muted);
+}
+.reactionBar {
+  flex: 1; height: 4px;
+  background: var(--bg-elevated);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.reactionBar > div { height: 100%; border-radius: 2px; transition: width 0.4s; }
+.reactionVal { font-family: var(--font-data); font-size: 10px; width: 24px; text-align: right; }
+.reactionFlags { display: flex; gap: var(--sp-2); }
+.flag {
+  font-family:   var(--font-display);
+  font-size:     9px;
+  color:         var(--cyan-neon);
+  background:    rgba(0,245,255,0.08);
+  padding:       2px 6px;
+  border-radius: var(--radius-sm);
+}
+.patternList { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.patternBadge {
+  font-size:    10px;
+  background:   rgba(179,71,255,0.12);
+  color:        var(--purple-neon);
+  padding:      2px 8px;
+  border-radius:var(--radius-sm);
+  text-transform: capitalize;
+}
+.bayes {
+  font-family:  var(--font-data);
+  font-size:    11px;
+  color:        var(--muted);
+}
+.bayesStd { color: var(--orange-neon); margin-left: 4px; }

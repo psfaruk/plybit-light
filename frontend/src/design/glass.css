@@ -1,0 +1,30 @@
+.glass {
+  background:    var(--bg-glass);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border:        1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius-md);
+}
+.glass-elevated {
+  background:    rgba(18, 29, 46, 0.90);
+  backdrop-filter: blur(24px);
+  border:        1px solid rgba(255,255,255,0.10);
+  border-radius: var(--radius-md);
+}
+.panel-header {
+  font-family:   var(--font-display);
+  font-size:     10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color:         var(--muted);
+  padding:       var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  display:       flex;
+  align-items:   center;
+  gap:           var(--sp-2);
+}
+.panel-header .dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--blue-neon);
+}
