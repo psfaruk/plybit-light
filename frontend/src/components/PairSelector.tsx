@@ -2,17 +2,34 @@ import { useStore } from "../store/useStore";
 import styles from "./PairSelector.module.css";
 
 const FOREX_PAIRS = [
+  // Majors
   "frxEURUSD","frxGBPUSD","frxUSDJPY","frxUSDCHF",
   "frxUSDCAD","frxAUDUSD","frxNZDUSD",
-  "frxEURGBP","frxEURJPY","frxGBPJPY","frxAUDJPY",
-  "frxEURCAD","frxGBPCAD","frxEURAUD","frxGBPAUD",
-  "R_10","R_25","R_50","R_75","R_100","frxXAUUSD",
+  // EUR crosses
+  "frxEURGBP","frxEURJPY","frxEURCAD","frxEURAUD",
+  "frxEURCHF","frxEURNZD",
+  // GBP crosses
+  "frxGBPJPY","frxGBPCAD","frxGBPAUD",
+  "frxGBPCHF","frxGBPNZD",
+  // Other crosses
+  "frxAUDJPY","frxAUDCAD","frxAUDNZD",
+  "frxNZDJPY",
+  // Synthetics
+  "R_10","R_25","R_50","R_75","R_100",
+  // Gold
+  "frxXAUUSD",
 ];
 
-const CRYPTO_PAIRS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT"];
+const CRYPTO_PAIRS = [
+  "BTCUSDT","ETHUSDT","BNBUSDT","XRPUSDT","SOLUSDT",
+  "ADAUSDT","DOGEUSDT","AVAXUSDT","DOTUSDT","MATICUSDT",
+];
 
 function formatPair(p: string): string {
-  return p.replace("frx","").replace("USD","").replace("USDT","/USDT") || p;
+  if (p.startsWith("R_")) return p;
+  const clean = p.replace("frx", "");
+  if (clean.length === 6) return `${clean.slice(0, 3)}/${clean.slice(3)}`;
+  return clean;
 }
 
 export function PairSelector() {

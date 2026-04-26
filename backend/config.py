@@ -10,14 +10,27 @@ TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "")
 
 # ── Pairs ────────────────────────────────────────────────────────
 FOREX_PAIRS = [
+    # Majors
     "frxEURUSD", "frxGBPUSD", "frxUSDJPY", "frxUSDCHF",
     "frxUSDCAD", "frxAUDUSD", "frxNZDUSD",
-    "frxEURGBP", "frxEURJPY", "frxGBPJPY", "frxAUDJPY",
-    "frxEURCAD", "frxGBPCAD", "frxEURAUD", "frxGBPAUD",
+    # EUR crosses
+    "frxEURGBP", "frxEURJPY", "frxEURCAD", "frxEURAUD",
+    "frxEURCHF", "frxEURNZD",
+    # GBP crosses
+    "frxGBPJPY", "frxGBPCAD", "frxGBPAUD",
+    "frxGBPCHF", "frxGBPNZD",
+    # Other crosses
+    "frxAUDJPY", "frxAUDCAD", "frxAUDNZD",
+    "frxNZDJPY",
+    # Deriv synthetic volatility indices
     "R_10", "R_25", "R_50", "R_75", "R_100",
+    # Gold
     "frxXAUUSD",
 ]
-CRYPTO_PAIRS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+CRYPTO_PAIRS = [
+    "BTCUSDT", "ETHUSDT", "BNBUSDT", "XRPUSDT", "SOLUSDT",
+    "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "MATICUSDT",
+]
 ALL_PAIRS    = FOREX_PAIRS + CRYPTO_PAIRS
 
 # ── Candle Count ────────────────────────────────────────────────────
