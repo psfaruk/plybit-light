@@ -1,28 +1,32 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "../store/useStore";
 
-const WS_BASE = import.meta.env.VITE_WS_URL ?? `ws://${location.host}/ws`;
+const WS_BASE = import.meta.env.VITE_WS_URL ??
+  `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
 
 export function useWebSocket() {
   const { activePair, setConnected, addCandle, setHistory, setSignal, setModelStatus } = useStore();
   const ws = useRef<WebSocket | null>(null);
 
   useEffect(() => {
+    let active = true;
     let retryTimer: ReturnType<typeof setTimeout>;
 
     function connect() {
+      if (!active) return;
+
       const url = `${WS_BASE}/${activePair}`;
       const socket = new WebSocket(url);
       ws.current = socket;
 
       socket.onopen = () => {
+        if (!active) { socket.close(); return; }
         setConnected(true);
-        console.log(`WS connected: ${url}`);
       };
 
       socket.onclose = () => {
         setConnected(false);
-        retryTimer = setTimeout(connect, 3000);
+        if (active) retryTimer = setTimeout(connect, 3000);
       };
 
       socket.onerror = () => {
@@ -30,6 +34,7 @@ export function useWebSocket() {
       };
 
       socket.onmessage = (ev: MessageEvent<string>) => {
+        if (!active) return;
         try {
           const msg = JSON.parse(ev.data) as Record<string, unknown>;
           handleMessage(msg);
@@ -75,8 +80,17 @@ export function useWebSocket() {
     connect();
 
     return () => {
+      active = false;
       clearTimeout(retryTimer);
-      ws.current?.close();
+      const current = ws.current;
+      if (current) {
+        // Defer close if still CONNECTING to avoid the browser error
+        if (current.readyState === WebSocket.CONNECTING) {
+          current.onopen = () => current.close();
+        } else {
+          current.close();
+        }
+      }
     };
   }, [activePair]);
 }
