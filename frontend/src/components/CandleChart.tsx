@@ -1,6 +1,18 @@
 import { useEffect, useRef } from "react";
 import { createChart, IChartApi, ISeriesApi, ColorType, CrosshairMode } from "lightweight-charts";
 import { useStore } from "../store/useStore";
+import styles from "./CandleChart.module.css";
+
+function isForexMarketClosed(pair: string): boolean {
+  if (pair.startsWith("BTC") || pair.startsWith("ETH") || pair.endsWith("USDT")) return false;
+  const now  = new Date();
+  const dow  = now.getUTCDay();    // 0=Sun, 6=Sat
+  const h    = now.getUTCHours();
+  if (dow === 5 && h >= 21) return true;  // Friday ≥ 21:00 UTC
+  if (dow === 6) return true;              // Saturday
+  if (dow === 0 && h < 21) return true;   // Sunday < 21:00 UTC
+  return false;
+}
 
 export function CandleChart() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -9,7 +21,7 @@ export function CandleChart() {
   const ema5Ref  = useRef<ISeriesApi<"Line"> | null>(null);
   const ema20Ref = useRef<ISeriesApi<"Line"> | null>(null);
 
-  const { candles, activeTf, signal } = useStore();
+  const { candles, activeTf, activePair, signal, isLoading } = useStore();
 
   // Init chart
   useEffect(() => {
@@ -130,7 +142,26 @@ export function CandleChart() {
     }]);
   }, [signal]);
 
-  return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
+  const marketClosed = isForexMarketClosed(activePair);
+
+  return (
+    <div className={styles.wrapper}>
+      <div ref={containerRef} className={styles.canvas} />
+
+      {isLoading && (
+        <div className={styles.loadingOverlay}>
+          <div className={styles.spinner} />
+          <span className={styles.loadingText}>Loading chart…</span>
+        </div>
+      )}
+
+      {marketClosed && !isLoading && (
+        <div className={styles.marketClosedBanner}>
+          FOREX CLOSED · Opens Sunday 21:00 UTC
+        </div>
+      )}
+    </div>
+  );
 }
 
 function calcEMA(values: number[], period: number): number[] {

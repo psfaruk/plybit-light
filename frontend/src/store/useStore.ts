@@ -56,6 +56,10 @@ interface PlaybitState {
   setPair:     (p: string) => void;
   setTf:       (tf: number) => void;
 
+  /* Loading */
+  isLoading:   boolean;
+  setLoading:  (v: boolean) => void;
+
   /* Candles */
   candles:     Record<number, Candle[]>;  // granularity → candles
   addCandle:   (tf: number, c: Candle, closed?: boolean) => void;
@@ -81,8 +85,11 @@ export const useStore = create<PlaybitState>((set, get) => ({
 
   activePair: "frxEURUSD",
   activeTf:   60,
-  setPair:    (p) => set({ activePair: p, candles: {}, signal: null }),
-  setTf:      (tf) => set({ activeTf: tf }),
+  setPair:    (p) => set({ activePair: p, candles: {}, signal: null, isLoading: true }),
+  setTf:      (tf) => set({ activeTf: tf, isLoading: true }),
+
+  isLoading:  false,
+  setLoading: (v) => set({ isLoading: v }),
 
   candles:    {},
   addCandle:  (tf, c, closed) => set((state) => {
@@ -94,8 +101,9 @@ export const useStore = create<PlaybitState>((set, get) => ({
     return { candles: { ...state.candles, [tf]: existing }, livePrice: c.close };
   }),
   setHistory: (tf, cs) => set((state) => ({
-    candles: { ...state.candles, [tf]: cs },
+    candles:   { ...state.candles, [tf]: cs },
     livePrice: cs.length > 0 ? cs[cs.length - 1].close : state.livePrice,
+    isLoading: false,
   })),
 
   signal:     null,

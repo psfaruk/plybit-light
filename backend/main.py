@@ -74,6 +74,9 @@ window_selectors:dict[str, WindowSelector]   = {}
 # circuit breaker: consecutive losses per pair
 loss_streak:     dict[str, int]              = {}
 
+# tick builders: pair → current 1M candle being assembled from raw ticks
+_tick_builders:  dict[str, dict]             = {}
+
 # active WebSocket clients
 ws_clients: set[WebSocket] = set()
 
@@ -216,49 +219,82 @@ async def redis_subscriber() -> None:
 
 
 async def direct_deriv_listener() -> None:
-    """Subscribe directly to Deriv WebSocket for live 1M candles on all forex pairs."""
+    """Subscribe to Deriv tick stream for all forex pairs; builds 1M OHLC locally."""
     import websockets as ws_lib
 
     url = f"wss://ws.binaryws.com/websockets/v3?app_id={config.DERIVE_APP_ID}"
     try:
-        async with ws_lib.connect(url, ping_interval=30) as ws:
+        async with ws_lib.connect(url, ping_interval=20, ping_timeout=40) as ws:
             await ws.send(json.dumps({"authorize": config.DERIVE_TOKEN}))
-            auth = json.loads(await ws.recv())
+            auth = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
             if auth.get("error"):
                 log.error("Deriv auth failed: %s", auth["error"])
                 return
 
-            log.info("Deriv live listener authorised — subscribing %d pairs", len(config.FOREX_PAIRS))
+            log.info("Deriv tick listener authorised — subscribing %d pairs", len(config.FOREX_PAIRS))
             for pair in config.FOREX_PAIRS:
-                await ws.send(json.dumps({
-                    "ticks_history": pair,
-                    "subscribe":     1,
-                    "end":           "latest",
-                    "count":         1,
-                    "granularity":   60,
-                    "style":         "candles",
-                }))
-                await asyncio.sleep(0.1)  # avoid burst rate-limit
+                await ws.send(json.dumps({"ticks": pair, "subscribe": 1}))
+                await asyncio.sleep(0.05)  # avoid burst rate-limit
 
             while True:
-                raw  = await ws.recv()
+                raw  = await asyncio.wait_for(ws.recv(), timeout=60)
                 data = json.loads(raw)
-                if "ohlc" in data:
-                    ohlc     = data["ohlc"]
-                    pair_sym = str(ohlc.get("symbol", ""))
-                    candle   = {
-                        "epoch":  float(ohlc["open_time"]),
-                        "open":   float(ohlc["open"]),
-                        "high":   float(ohlc["high"]),
-                        "low":    float(ohlc["low"]),
-                        "close":  float(ohlc["close"]),
-                        "closed": float(ohlc.get("close_time", 0)) < time.time(),
-                    }
-                    await on_candle(pair_sym, 60, candle)
+                if "tick" in data:
+                    tick     = data["tick"]
+                    pair_sym = str(tick.get("symbol", ""))
+                    price    = float(tick.get("quote", 0))
+                    epoch    = float(tick.get("epoch", time.time()))
+                    if price > 0 and pair_sym:
+                        await _process_tick(pair_sym, price, epoch)
+
     except Exception as e:
         log.error("Direct Deriv listener error: %s — retrying in 10s", e)
         await asyncio.sleep(10)
         asyncio.create_task(direct_deriv_listener())
+
+
+async def _process_tick(pair: str, price: float, epoch: float) -> None:
+    """Build 1M OHLC candles from raw ticks; emits closed candle + live update."""
+    minute_epoch = int(epoch) // 60 * 60  # floor to minute boundary
+
+    builder = _tick_builders.get(pair)
+
+    if builder is None or builder["minute_epoch"] != minute_epoch:
+        # New minute — finalise the previous candle as closed
+        if builder and builder["count"] > 0:
+            await on_candle(pair, 60, {
+                "epoch":  float(builder["minute_epoch"]),
+                "open":   builder["open"],
+                "high":   builder["high"],
+                "low":    builder["low"],
+                "close":  builder["close"],
+                "closed": True,
+            })
+        # Start fresh builder for this minute
+        _tick_builders[pair] = {
+            "minute_epoch": minute_epoch,
+            "open":  price,
+            "high":  price,
+            "low":   price,
+            "close": price,
+            "count": 1,
+        }
+    else:
+        builder["high"]  = max(builder["high"], price)
+        builder["low"]   = min(builder["low"],  price)
+        builder["close"] = price
+        builder["count"] += 1
+
+    # Emit live (not-yet-closed) candle update so chart stays in sync
+    b = _tick_builders[pair]
+    await on_candle(pair, 60, {
+        "epoch":  float(b["minute_epoch"]),
+        "open":   b["open"],
+        "high":   b["high"],
+        "low":    b["low"],
+        "close":  price,
+        "closed": False,
+    })
 
 
 # ── Candle Processing ────────────────────────────────────────
@@ -635,6 +671,32 @@ async def news_refresher() -> None:
 
 
 # ── REST Endpoints ───────────────────────────────────────────
+
+@app.get("/api/market-hours")
+async def get_market_hours() -> dict[str, Any]:
+    """Return forex market open/closed status and weekly schedule (UTC)."""
+    now = datetime.now(timezone.utc)
+    dow = now.weekday()   # 0=Mon … 6=Sun
+    h   = now.hour
+    m   = now.minute
+
+    closed = (dow == 4 and (h > 21 or (h == 21 and m >= 0))) or dow in (5, 6) or \
+             (dow == 6 and h < 21)
+
+    return {
+        "is_open": not closed,
+        "current_utc": now.strftime("%Y-%m-%d %H:%M UTC"),
+        "schedule": {
+            "open":  "Sunday 21:00 UTC",
+            "close": "Friday 21:00 UTC",
+        },
+        "closed_days": [
+            "Friday 21:00 UTC → Saturday (all day)",
+            "Sunday (all day until 21:00 UTC)",
+        ],
+        "note": "Crypto markets trade 24/7",
+    }
+
 
 @app.get("/api/pairs")
 async def get_pairs() -> dict[str, Any]:
