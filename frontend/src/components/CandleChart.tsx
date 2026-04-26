@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { createChart, IChartApi, ISeriesApi, CandlestickSeries, LineSeries, ColorType, CrosshairMode } from "lightweight-charts";
+import { createChart, IChartApi, ISeriesApi, ColorType, CrosshairMode } from "lightweight-charts";
 import { useStore } from "../store/useStore";
 
 export function CandleChart() {
@@ -36,7 +36,7 @@ export function CandleChart() {
       height: containerRef.current.clientHeight,
     });
 
-    const candleSeries = chart.addSeries(CandlestickSeries, {
+    const candleSeries = chart.addCandlestickSeries({
       upColor:   "#00ff88",
       downColor: "#ff2d6b",
       borderUpColor:   "#00ff88",
@@ -45,14 +45,14 @@ export function CandleChart() {
       wickDownColor: "#cc1144",
     });
 
-    const ema5 = chart.addSeries(LineSeries, {
+    const ema5 = chart.addLineSeries({
       color:       "#00b4ff",
       lineWidth:   1,
       priceLineVisible: false,
       lastValueVisible: false,
     });
 
-    const ema20 = chart.addSeries(LineSeries, {
+    const ema20 = chart.addLineSeries({
       color:       "#b347ff",
       lineWidth:   1,
       priceLineVisible: false,
