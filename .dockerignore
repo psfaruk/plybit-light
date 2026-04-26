@@ -12,7 +12,8 @@
 **/target
 **/rust-engine
 **/go-streamer
-frontend/
+frontend/node_modules
+frontend/dist
 **/julia-models
 backend/models/*.pkl
 backend/models/*.joblib
