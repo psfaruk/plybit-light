@@ -1,4 +1,4 @@
-# Root Dockerfile — builds Python backend (Railway single-service mode)
+# Root Dockerfile — Python backend, Railway-compatible
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -16,4 +16,4 @@ RUN mkdir -p models
 
 EXPOSE 8003
 
-CMD ["sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8003} --workers 1"]
+CMD ["/bin/sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8003} --workers 1"]
