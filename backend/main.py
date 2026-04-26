@@ -110,6 +110,9 @@ async def startup() -> None:
 
 # ── History Loading ──────────────────────────────────────────
 
+_history_sem = asyncio.Semaphore(4)  # max 4 concurrent Deriv WS connections
+
+
 async def initial_history_loader() -> None:
     """Load historical candles for all pairs on startup."""
     log.info("Loading historical candles…")
@@ -125,18 +128,25 @@ async def load_history_for_pair(pair: str) -> None:
 
     for granularity in list(config.CANDLE_COUNT.keys()):
         try:
-            if is_crypto:
-                candles = await binance_client.fetch_history(pair, granularity)
-            else:
-                candles = await deriv_client.fetch_history(pair, granularity)
+            async with _history_sem:
+                if is_crypto:
+                    candles = await binance_client.fetch_history(pair, granularity)
+                else:
+                    candles = await deriv_client.fetch_history(pair, granularity)
 
             if candles:
                 candle_store[pair][granularity] = candles
-                log.debug("Loaded %d × %ds candles for %s", len(candles), granularity, pair)
+                log.info("Loaded %d × %ds candles for %s", len(candles), granularity, pair)
 
-                # Train ML models on 1M data
-                if granularity == 60 and len(candles) >= config.MIN_CANDLES:
-                    asyncio.create_task(train_models_for_pair(pair))
+                # Push 1M history to already-connected clients immediately
+                if granularity == 60:
+                    await broadcast({
+                        "type":    "history",
+                        "pair":    pair,
+                        "candles": candles[-300:],
+                    })
+                    if len(candles) >= config.MIN_CANDLES:
+                        asyncio.create_task(train_models_for_pair(pair))
         except Exception as e:
             log.error("History load error %s %ds: %s", pair, granularity, e)
 
@@ -175,9 +185,12 @@ async def train_models_for_pair(pair: str) -> None:
 # ── Redis Subscriber ─────────────────────────────────────────
 
 async def redis_subscriber() -> None:
+    # Always run the direct Deriv listener for live 1M ticks.
+    # Redis pub/sub is only populated by the Go streamer; without it we need the fallback.
+    asyncio.create_task(direct_deriv_listener())
+
     if redis_client is None:
-        log.info("Redis not available — starting Deriv WebSocket listener instead")
-        asyncio.create_task(direct_deriv_listener())
+        log.info("Redis not available — direct Deriv listener only")
         return
 
     log.info("Subscribing to Redis candle channels…")
@@ -203,31 +216,35 @@ async def redis_subscriber() -> None:
 
 
 async def direct_deriv_listener() -> None:
-    """Fallback: subscribe directly to Deriv WebSocket for live candles."""
+    """Subscribe directly to Deriv WebSocket for live 1M candles on all forex pairs."""
     import websockets as ws_lib
 
     url = f"wss://ws.binaryws.com/websockets/v3?app_id={config.DERIVE_APP_ID}"
     try:
-        async with ws_lib.connect(url) as ws:
+        async with ws_lib.connect(url, ping_interval=30) as ws:
             await ws.send(json.dumps({"authorize": config.DERIVE_TOKEN}))
-            await ws.recv()
+            auth = json.loads(await ws.recv())
+            if auth.get("error"):
+                log.error("Deriv auth failed: %s", auth["error"])
+                return
 
-            # Subscribe to 1M candles for primary pairs
-            for pair in config.FOREX_PAIRS[:5]:  # start with first 5 to avoid rate limit
+            log.info("Deriv live listener authorised — subscribing %d pairs", len(config.FOREX_PAIRS))
+            for pair in config.FOREX_PAIRS:
                 await ws.send(json.dumps({
                     "ticks_history": pair,
-                    "subscribe": 1,
-                    "end": "latest",
-                    "count": 1,
-                    "granularity": 60,
-                    "style": "candles",
+                    "subscribe":     1,
+                    "end":           "latest",
+                    "count":         1,
+                    "granularity":   60,
+                    "style":         "candles",
                 }))
+                await asyncio.sleep(0.1)  # avoid burst rate-limit
 
             while True:
                 raw  = await ws.recv()
                 data = json.loads(raw)
                 if "ohlc" in data:
-                    ohlc = data["ohlc"]
+                    ohlc     = data["ohlc"]
                     pair_sym = str(ohlc.get("symbol", ""))
                     candle   = {
                         "epoch":  float(ohlc["open_time"]),
@@ -235,12 +252,12 @@ async def direct_deriv_listener() -> None:
                         "high":   float(ohlc["high"]),
                         "low":    float(ohlc["low"]),
                         "close":  float(ohlc["close"]),
-                        "closed": bool(ohlc.get("close_time", 0) < time.time()),
+                        "closed": float(ohlc.get("close_time", 0)) < time.time(),
                     }
                     await on_candle(pair_sym, 60, candle)
     except Exception as e:
-        log.error("Direct Deriv listener error: %s — retrying in 5s", e)
-        await asyncio.sleep(5)
+        log.error("Direct Deriv listener error: %s — retrying in 10s", e)
+        await asyncio.sleep(10)
         asyncio.create_task(direct_deriv_listener())
 
 
