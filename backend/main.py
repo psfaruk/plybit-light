@@ -12,8 +12,6 @@ import pandas as pd
 import redis.asyncio as aioredis
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 
 import config
 from advanced_features import compute_all_advanced
@@ -683,18 +681,6 @@ def _candles_to_df(candles: list[dict[str, Any]]) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.sort_values("epoch").reset_index(drop=True)
     return df
-
-
-# ── Frontend static files ────────────────────────────────────
-
-import os as _os
-_static_dir = _os.path.join(_os.path.dirname(__file__), "static")
-if _os.path.isdir(_static_dir):
-    app.mount("/assets", StaticFiles(directory=f"{_static_dir}/assets"), name="assets")
-
-    @app.get("/{full_path:path}", include_in_schema=False)
-    async def serve_spa(full_path: str) -> FileResponse:
-        return FileResponse(f"{_static_dir}/index.html")
 
 
 # ── Entry point ──────────────────────────────────────────────
