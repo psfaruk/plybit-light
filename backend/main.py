@@ -290,14 +290,16 @@ async def direct_deriv_listener() -> None:
 
 async def direct_binance_listener() -> None:
     """
-    Lossless tick capture from Binance trade stream for all crypto pairs.
-    Auto-reconnect with exponential backoff. Crypto streams 24/7 — any
-    silence > 60s indicates a real drop.
+    Lossless crypto tick capture via Bybit public spot trade stream.
+    (Named `binance` for legacy compat — Binance.com geo-blocked on Railway.)
+
+    - WebSocket subscription per pair (no polling).
+    - Auto-reconnect with exponential backoff.
+    - Resubscribes all pairs on reconnect.
     """
     import websockets as ws_lib
 
-    streams = "/".join(f"{p.lower()}@trade" for p in config.CRYPTO_PAIRS)
-    url     = f"wss://stream.binance.com:9443/stream?streams={streams}"
+    url         = "wss://stream.bybit.com/v5/public/spot"
     backoff     = 1.0
     backoff_max = 60.0
 
@@ -307,22 +309,35 @@ async def direct_binance_listener() -> None:
                 url, ping_interval=15, ping_timeout=30, close_timeout=5,
                 max_size=2 ** 20,
             ) as ws:
-                log.info("Binance trade listener up — %d crypto pairs", len(config.CRYPTO_PAIRS))
+                # Subscribe to publicTrade for every crypto pair
+                args = [f"publicTrade.{p}" for p in config.CRYPTO_PAIRS]
+                await ws.send(json.dumps({"op": "subscribe", "args": args}))
+                log.info("Bybit trade listener up — %d crypto pairs", len(config.CRYPTO_PAIRS))
                 backoff = 1.0
+
                 while True:
-                    raw  = await asyncio.wait_for(ws.recv(), timeout=60)
-                    msg  = json.loads(raw)
-                    data = msg.get("data") or msg
-                    if data.get("e") == "trade":
-                        pair_sym = str(data.get("s", "")).upper()
-                        price    = float(data.get("p", 0))
-                        epoch    = float(data.get("T", time.time() * 1000)) / 1000.0
+                    raw = await asyncio.wait_for(ws.recv(), timeout=60)
+                    msg = json.loads(raw)
+
+                    # Subscription ack / pong
+                    if msg.get("op") in ("subscribe", "pong") or msg.get("success") is True:
+                        continue
+
+                    topic = msg.get("topic", "")
+                    if not topic.startswith("publicTrade."):
+                        continue
+
+                    for trade in msg.get("data", []):
+                        pair_sym = str(trade.get("s", "")).upper()
+                        price    = float(trade.get("p", 0))
+                        epoch    = float(trade.get("T", time.time() * 1000)) / 1000.0
                         if price > 0 and pair_sym in config.CRYPTO_PAIRS:
                             await _process_tick(pair_sym, price, epoch)
+
         except asyncio.TimeoutError:
-            log.warning("Binance trade stream silent > 60s — reconnecting")
+            log.warning("Bybit trade stream silent > 60s — reconnecting")
         except Exception as e:
-            log.error("Binance listener error: %s — reconnecting in %.1fs", e, backoff)
+            log.error("Bybit listener error: %s — reconnecting in %.1fs", e, backoff)
 
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, backoff_max)
@@ -617,7 +632,6 @@ async def _run_signal_pipeline(
         return _skip_signal("circuit_breaker")
 
     # Detect patterns list
-    from candle_reaction import compute_candle_reaction
     pattern_names: list[str] = []
     if reaction.get("pin_bull"):
         pattern_names.append("pin_bar_bull")
