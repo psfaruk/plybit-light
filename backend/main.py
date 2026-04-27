@@ -77,6 +77,10 @@ loss_streak:     dict[str, int]              = {}
 # tick builders: pair → current 1M candle being assembled from raw ticks
 _tick_builders:  dict[str, dict]             = {}
 
+# throttle live tick broadcasts (closed candles always pass through)
+_last_live_broadcast: dict[str, float]       = {}
+_LIVE_BROADCAST_INTERVAL = 0.5  # seconds between live tick broadcasts per pair
+
 # active WebSocket clients
 ws_clients: set[WebSocket] = set()
 
@@ -114,6 +118,7 @@ async def startup() -> None:
 # ── History Loading ──────────────────────────────────────────
 
 _history_sem = asyncio.Semaphore(4)  # max 4 concurrent Deriv WS connections
+_train_sem   = asyncio.Semaphore(2)  # max 2 concurrent ML training jobs
 
 
 async def initial_history_loader() -> None:
@@ -159,23 +164,24 @@ async def train_models_for_pair(pair: str) -> None:
     if len(candles) < config.MIN_CANDLES:
         return
 
-    df = _candles_to_df(candles)
-    now_hour = datetime.now(timezone.utc).hour
+    async with _train_sem:
+        df = _candles_to_df(candles)
+        now_hour = datetime.now(timezone.utc).hour
 
-    # Tabular models
-    tab = tabular_models.get(pair)
-    if tab is None:
-        tab = TabularPredictor(pair, 60)
-        tabular_models[pair] = tab
-    tab.train(df, now_hour)
+        tab = tabular_models.get(pair)
+        if tab is None:
+            tab = TabularPredictor(pair, 60)
+            tabular_models[pair] = tab
 
-    # Deep models
-    dp = deep_models.get(pair)
-    if dp is None:
-        dp = DeepPredictor(pair)
-        deep_models[pair] = dp
-    if len(candles) >= 100:
-        dp.train(df, now_hour)
+        # Run sync training in thread pool to keep event loop responsive
+        await asyncio.to_thread(tab.train, df, now_hour)
+
+        dp = deep_models.get(pair)
+        if dp is None:
+            dp = DeepPredictor(pair)
+            deep_models[pair] = dp
+        if len(candles) >= 100:
+            await asyncio.to_thread(dp.train, df, now_hour)
 
     await broadcast({
         "type":     "model_retrained",
@@ -188,9 +194,10 @@ async def train_models_for_pair(pair: str) -> None:
 # ── Redis Subscriber ─────────────────────────────────────────
 
 async def redis_subscriber() -> None:
-    # Always run the direct Deriv listener for live 1M ticks.
-    # Redis pub/sub is only populated by the Go streamer; without it we need the fallback.
+    # Always run direct exchange listeners for live ticks.
+    # Redis pub/sub is only populated by the Go streamer; without it we need fallbacks.
     asyncio.create_task(direct_deriv_listener())
+    asyncio.create_task(direct_binance_listener())
 
     if redis_client is None:
         log.info("Redis not available — direct Deriv listener only")
@@ -251,6 +258,32 @@ async def direct_deriv_listener() -> None:
         log.error("Direct Deriv listener error: %s — retrying in 10s", e)
         await asyncio.sleep(10)
         asyncio.create_task(direct_deriv_listener())
+
+
+async def direct_binance_listener() -> None:
+    """Subscribe to Binance trade stream for all crypto pairs; build 1M OHLC locally."""
+    import websockets as ws_lib
+
+    streams = "/".join(f"{p.lower()}@trade" for p in config.CRYPTO_PAIRS)
+    url     = f"wss://stream.binance.com:9443/stream?streams={streams}"
+
+    try:
+        async with ws_lib.connect(url, ping_interval=20, ping_timeout=40) as ws:
+            log.info("Binance trade listener connected — %d crypto pairs", len(config.CRYPTO_PAIRS))
+            while True:
+                raw  = await asyncio.wait_for(ws.recv(), timeout=120)
+                msg  = json.loads(raw)
+                data = msg.get("data") or msg
+                if data.get("e") == "trade":
+                    pair_sym = str(data.get("s", "")).upper()
+                    price    = float(data.get("p", 0))
+                    epoch    = float(data.get("T", time.time() * 1000)) / 1000.0
+                    if price > 0 and pair_sym in config.CRYPTO_PAIRS:
+                        await _process_tick(pair_sym, price, epoch)
+    except Exception as e:
+        log.error("Binance listener error: %s — retrying in 10s", e)
+        await asyncio.sleep(10)
+        asyncio.create_task(direct_binance_listener())
 
 
 async def _process_tick(pair: str, price: float, epoch: float) -> None:
@@ -330,16 +363,22 @@ async def on_candle(pair: str, granularity: int, candle: dict[str, Any]) -> None
         if kf:
             kf.update(float(candle["close"]))
 
-    # Broadcast live candle update
-    await broadcast({
-        "type":        "candle_update",
-        "pair":        pair,
-        "granularity": granularity,
-        "candle":      candle,
-    })
+    # Broadcast: always for closed candles; throttle live updates per pair
+    is_closed = bool(candle.get("closed", False))
+    now_t     = time.time()
+    last_t    = _last_live_broadcast.get(pair, 0.0)
+    if is_closed or (now_t - last_t) >= _LIVE_BROADCAST_INTERVAL:
+        await broadcast({
+            "type":        "candle_update",
+            "pair":        pair,
+            "granularity": granularity,
+            "candle":      candle,
+        })
+        if not is_closed:
+            _last_live_broadcast[pair] = now_t
 
     # Check if 1M candle closed → run signal pipeline
-    if granularity == 60 and candle.get("closed", False):
+    if granularity == 60 and is_closed:
         await on_1m_close(pair, candle)
 
 
