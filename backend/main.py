@@ -290,16 +290,13 @@ async def direct_deriv_listener() -> None:
 
 async def direct_binance_listener() -> None:
     """
-    Lossless crypto tick capture via Bybit public spot trade stream.
-    (Named `binance` for legacy compat — Binance.com geo-blocked on Railway.)
-
-    - WebSocket subscription per pair (no polling).
-    - Auto-reconnect with exponential backoff.
-    - Resubscribes all pairs on reconnect.
+    Lossless crypto tick capture via Binance.US trade stream.
+    (Binance.com is geo-blocked HTTP 451, Bybit is HTTP 403 from Railway US.)
     """
     import websockets as ws_lib
 
-    url         = "wss://stream.bybit.com/v5/public/spot"
+    streams     = "/".join(f"{p.lower()}@trade" for p in config.CRYPTO_PAIRS)
+    url         = f"wss://stream.binance.us:9443/stream?streams={streams}"
     backoff     = 1.0
     backoff_max = 60.0
 
@@ -309,35 +306,22 @@ async def direct_binance_listener() -> None:
                 url, ping_interval=15, ping_timeout=30, close_timeout=5,
                 max_size=2 ** 20,
             ) as ws:
-                # Subscribe to publicTrade for every crypto pair
-                args = [f"publicTrade.{p}" for p in config.CRYPTO_PAIRS]
-                await ws.send(json.dumps({"op": "subscribe", "args": args}))
-                log.info("Bybit trade listener up — %d crypto pairs", len(config.CRYPTO_PAIRS))
+                log.info("Binance.US trade listener up — %d crypto pairs", len(config.CRYPTO_PAIRS))
                 backoff = 1.0
-
                 while True:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=60)
-                    msg = json.loads(raw)
-
-                    # Subscription ack / pong
-                    if msg.get("op") in ("subscribe", "pong") or msg.get("success") is True:
-                        continue
-
-                    topic = msg.get("topic", "")
-                    if not topic.startswith("publicTrade."):
-                        continue
-
-                    for trade in msg.get("data", []):
-                        pair_sym = str(trade.get("s", "")).upper()
-                        price    = float(trade.get("p", 0))
-                        epoch    = float(trade.get("T", time.time() * 1000)) / 1000.0
+                    raw  = await asyncio.wait_for(ws.recv(), timeout=60)
+                    msg  = json.loads(raw)
+                    data = msg.get("data") or msg
+                    if data.get("e") == "trade":
+                        pair_sym = str(data.get("s", "")).upper()
+                        price    = float(data.get("p", 0))
+                        epoch    = float(data.get("T", time.time() * 1000)) / 1000.0
                         if price > 0 and pair_sym in config.CRYPTO_PAIRS:
                             await _process_tick(pair_sym, price, epoch)
-
         except asyncio.TimeoutError:
-            log.warning("Bybit trade stream silent > 60s — reconnecting")
+            log.warning("Binance.US stream silent > 60s — reconnecting")
         except Exception as e:
-            log.error("Bybit listener error: %s — reconnecting in %.1fs", e, backoff)
+            log.error("Binance.US listener error: %s — reconnecting in %.1fs", e, backoff)
 
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, backoff_max)
@@ -424,6 +408,10 @@ async def on_candle(pair: str, granularity: int, candle: dict[str, Any]) -> None
         if kf:
             kf.update(float(candle["close"]))
 
+    # Aggregate 1M into higher TFs so 2M/5M/15M/1h/4h chart stays live
+    if granularity == 60:
+        await _aggregate_higher_tfs(pair, candle)
+
     # Broadcast: always for closed candles; throttle live updates per pair
     is_closed = bool(candle.get("closed", False))
     now_t     = time.time()
@@ -441,6 +429,59 @@ async def on_candle(pair: str, granularity: int, candle: dict[str, Any]) -> None
     # Check if 1M candle closed → run signal pipeline
     if granularity == 60 and is_closed:
         await on_1m_close(pair, candle)
+
+
+# Higher timeframes (in seconds) we keep live by aggregating 1M candles
+_HIGHER_TFS = (120, 300, 900, 3600, 14400)
+
+
+async def _aggregate_higher_tfs(pair: str, m1_candle: dict[str, Any]) -> None:
+    """Roll the latest 1M candle into all higher timeframe buckets."""
+    epoch = float(m1_candle["epoch"])
+    open_ = float(m1_candle["open"])
+    high  = float(m1_candle["high"])
+    low   = float(m1_candle["low"])
+    close = float(m1_candle["close"])
+
+    pair_store = candle_store.setdefault(pair, {})
+
+    for tf in _HIGHER_TFS:
+        bucket_epoch = int(epoch) // tf * tf
+        store = pair_store.setdefault(tf, [])
+
+        if store and store[-1]["epoch"] == bucket_epoch:
+            # Update existing bucket
+            agg = store[-1]
+            agg["high"]  = max(float(agg["high"]), high)
+            agg["low"]   = min(float(agg["low"]),  low)
+            agg["close"] = close
+        else:
+            # Start a new bucket — mark previous as closed
+            if store:
+                store[-1]["closed"] = True
+            store.append({
+                "epoch":  float(bucket_epoch),
+                "open":   open_,
+                "high":   high,
+                "low":    low,
+                "close":  close,
+                "closed": False,
+            })
+
+        if len(store) > config.HISTORY_COUNT:
+            pair_store[tf] = store[-config.HISTORY_COUNT:]
+
+        # Throttle live broadcast same as 1M
+        now_t  = time.time()
+        last_t = _last_live_broadcast.get(f"{pair}:{tf}", 0.0)
+        if (now_t - last_t) >= _LIVE_BROADCAST_INTERVAL:
+            await broadcast({
+                "type":        "candle_update",
+                "pair":        pair,
+                "granularity": tf,
+                "candle":      store[-1],
+            })
+            _last_live_broadcast[f"{pair}:{tf}"] = now_t
 
 
 async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:

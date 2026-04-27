@@ -4,9 +4,27 @@ import { useStore } from "../store/useStore";
 const WS_BASE = import.meta.env.VITE_WS_URL ??
   `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
 
+const API_BASE = import.meta.env.VITE_API_URL ??
+  `${location.protocol}//${location.host}`;
+
 export function useWebSocket() {
-  const { activePair, setConnected, addCandle, setHistory, setSignal, setModelStatus } = useStore();
+  const { activePair, activeTf, setConnected, addCandle, setHistory, setSignal, setModelStatus } = useStore();
   const ws = useRef<WebSocket | null>(null);
+
+  // Fetch history via REST whenever pair or timeframe changes
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/candles/${activePair}?granularity=${activeTf}&count=300`);
+        if (!r.ok) return;
+        const data = await r.json() as { candles?: Array<{ epoch: number; open: number; high: number; low: number; close: number }> };
+        if (cancelled) return;
+        setHistory(activeTf, data.candles ?? []);
+      } catch {/* ignore */}
+    })();
+    return () => { cancelled = true; };
+  }, [activePair, activeTf]);
 
   useEffect(() => {
     let active = true;
@@ -52,9 +70,11 @@ export function useWebSocket() {
       if (pairScoped && msgPair && msgPair !== activePair) return;
 
       switch (msg.type) {
-        case "history":
-          setHistory(60, (msg.candles as Parameters<typeof setHistory>[1]) ?? []);
+        case "history": {
+          const gran = (msg.granularity as number) ?? 60;
+          setHistory(gran, (msg.candles as Parameters<typeof setHistory>[1]) ?? []);
           break;
+        }
 
         case "candle_update": {
           const c = msg.candle as { epoch: number; open: number; high: number; low: number; close: number };
