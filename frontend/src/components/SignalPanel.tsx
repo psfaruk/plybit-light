@@ -44,14 +44,29 @@ function CountdownTimer({ expiryBars }: { expiryBars: number }) {
   );
 }
 
+const BLOCK_REASON_LABEL: Record<string, string> = {
+  market_closed:     "Market closed (forex)",
+  news_window:       "High-impact news window",
+  choppy_market:     "Choppy market (ADX low)",
+  mtf_conflict:      "Multi-timeframe conflict",
+  no_consensus:      "AI models disagree",
+  ppo_skip:          "RL safety gate",
+  meta_label_block:  "Meta-label rejected",
+  below_threshold:   "Confidence below threshold",
+  circuit_breaker:   "Circuit breaker (loss streak)",
+};
+
 export function SignalPanel() {
-  const { signal, modelStatus } = useStore();
+  const { signal, modelStatus, blockReason } = useStore();
 
   if (!signal || signal.signal === "SKIP") {
+    const blockLabel = blockReason ? (BLOCK_REASON_LABEL[blockReason] ?? blockReason) : "";
     return (
       <div className={`${styles.panel} ${styles.waiting}`}>
         <div className={styles.waitingDot} />
-        <div className={styles.waitingText}>Scanning market…</div>
+        <div className={styles.waitingText}>
+          {blockLabel ? `Waiting: ${blockLabel}` : "Scanning market…"}
+        </div>
         {!modelStatus.is_trained && (
           <div className={styles.trainingBadge}>
             Training AI: {modelStatus.n_candles} candles

@@ -8,7 +8,7 @@ const API_BASE = import.meta.env.VITE_API_URL ??
   `${location.protocol}//${location.host}`;
 
 export function useWebSocket() {
-  const { activePair, activeTf, setConnected, addCandle, setHistory, setSignal, setModelStatus } = useStore();
+  const { activePair, activeTf, setConnected, addCandle, setHistory, setSignal, setModelStatus, setBlockReason } = useStore();
   const ws = useRef<WebSocket | null>(null);
 
   // Fetch history via REST whenever pair or timeframe changes
@@ -66,6 +66,7 @@ export function useWebSocket() {
       const msgPair = msg.pair as string | undefined;
       const pairScoped = msg.type === "history" || msg.type === "candle_update"
         || msg.type === "candle_closed" || msg.type === "signal"
+        || msg.type === "signal_blocked"
         || msg.type === "model_status" || msg.type === "model_retrained";
       if (pairScoped && msgPair && msgPair !== activePair) return;
 
@@ -92,6 +93,11 @@ export function useWebSocket() {
 
         case "signal":
           setSignal(msg as unknown as Parameters<typeof setSignal>[0]);
+          setBlockReason("");
+          break;
+
+        case "signal_blocked":
+          setBlockReason((msg.reason as string) ?? "blocked");
           break;
 
         case "model_status":

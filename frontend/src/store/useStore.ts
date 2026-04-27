@@ -77,6 +77,10 @@ interface PlaybitState {
   /* Live price */
   livePrice:   number;
   setLivePrice:(p: number) => void;
+
+  /* Block reason — last reason a signal was suppressed by the gate */
+  blockReason: string;
+  setBlockReason: (r: string) => void;
 }
 
 export const useStore = create<PlaybitState>((set, get) => ({
@@ -118,4 +122,7 @@ export const useStore = create<PlaybitState>((set, get) => ({
 
   livePrice:  0,
   setLivePrice:(p) => set({ livePrice: p }),
+
+  blockReason: "",
+  setBlockReason: (r) => set({ blockReason: r }),
 }));

@@ -290,13 +290,13 @@ async def direct_deriv_listener() -> None:
 
 async def direct_binance_listener() -> None:
     """
-    Lossless crypto tick capture via Binance.US trade stream.
-    (Binance.com is geo-blocked HTTP 451, Bybit is HTTP 403 from Railway US.)
+    Lossless crypto tick capture via Binance.US per-pair trade streams.
+    Uses explicit SUBSCRIBE method to surface errors per symbol, so a single
+    delisted pair doesn't silence the whole stream.
     """
     import websockets as ws_lib
 
-    streams     = "/".join(f"{p.lower()}@trade" for p in config.CRYPTO_PAIRS)
-    url         = f"wss://stream.binance.us:9443/stream?streams={streams}"
+    url         = "wss://stream.binance.us:9443/ws"
     backoff     = 1.0
     backoff_max = 60.0
 
@@ -306,20 +306,30 @@ async def direct_binance_listener() -> None:
                 url, ping_interval=15, ping_timeout=30, close_timeout=5,
                 max_size=2 ** 20,
             ) as ws:
-                log.info("Binance.US trade listener up — %d crypto pairs", len(config.CRYPTO_PAIRS))
+                params = [f"{p.lower()}@trade" for p in config.CRYPTO_PAIRS]
+                await ws.send(json.dumps({"method": "SUBSCRIBE", "params": params, "id": 1}))
+                log.info("Binance.US listener subscribing %d pairs: %s",
+                         len(config.CRYPTO_PAIRS), ",".join(config.CRYPTO_PAIRS))
                 backoff = 1.0
+
                 while True:
-                    raw  = await asyncio.wait_for(ws.recv(), timeout=60)
-                    msg  = json.loads(raw)
-                    data = msg.get("data") or msg
-                    if data.get("e") == "trade":
-                        pair_sym = str(data.get("s", "")).upper()
-                        price    = float(data.get("p", 0))
-                        epoch    = float(data.get("T", time.time() * 1000)) / 1000.0
+                    raw = await asyncio.wait_for(ws.recv(), timeout=90)
+                    msg = json.loads(raw)
+
+                    # SUBSCRIBE ack: {"result":null,"id":1}
+                    if "result" in msg and "id" in msg:
+                        if msg.get("error"):
+                            log.error("Binance.US subscribe error: %s", msg["error"])
+                        continue
+
+                    if msg.get("e") == "trade":
+                        pair_sym = str(msg.get("s", "")).upper()
+                        price    = float(msg.get("p", 0))
+                        epoch    = float(msg.get("T", time.time() * 1000)) / 1000.0
                         if price > 0 and pair_sym in config.CRYPTO_PAIRS:
                             await _process_tick(pair_sym, price, epoch)
         except asyncio.TimeoutError:
-            log.warning("Binance.US stream silent > 60s — reconnecting")
+            log.warning("Binance.US stream silent > 90s — reconnecting")
         except Exception as e:
             log.error("Binance.US listener error: %s — reconnecting in %.1fs", e, backoff)
 
@@ -383,14 +393,8 @@ async def on_candle(pair: str, granularity: int, candle: dict[str, Any]) -> None
 
     store = candle_store[pair].setdefault(granularity, [])
 
-    # Gap-free candle building
-    if store and candle.get("open") is not None:
-        last_close = float(store[-1]["close"])
-        new_open   = float(candle["open"])
-        if abs(new_open - last_close) > last_close * 0.001:
-            candle["open"] = last_close
-            candle["low"]  = min(float(candle["low"]), last_close)
-            candle["high"] = max(float(candle["high"]), last_close)
+    # NOTE: do NOT mutate candle.open to match previous close — that would
+    # distort real market data. Real gaps (weekend, news) must be preserved.
 
     # Merge with existing open candle or append
     if store and store[-1]["epoch"] == candle["epoch"]:
