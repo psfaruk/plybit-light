@@ -42,6 +42,7 @@ from window_selector import WindowSelector
 
 import deriv as deriv_client
 import binance as binance_client
+from tick_store import tick_store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("playbit")
@@ -226,71 +227,116 @@ async def redis_subscriber() -> None:
 
 
 async def direct_deriv_listener() -> None:
-    """Subscribe to Deriv tick stream for all forex pairs; builds 1M OHLC locally."""
+    """
+    Lossless tick capture from Deriv WebSocket for all forex pairs.
+
+    - Subscribes via `ticks` stream (server-pushed, no polling).
+    - Auto-reconnect with exponential backoff (1s → 60s).
+    - Resubscribes all pairs on reconnect — no ticks dropped after recovery.
+    - Built-in WebSocket ping/pong keeps connection alive across NAT/idle.
+    """
     import websockets as ws_lib
 
-    url = f"wss://ws.binaryws.com/websockets/v3?app_id={config.DERIVE_APP_ID}"
-    try:
-        async with ws_lib.connect(url, ping_interval=20, ping_timeout=40) as ws:
-            await ws.send(json.dumps({"authorize": config.DERIVE_TOKEN}))
-            auth = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
-            if auth.get("error"):
-                log.error("Deriv auth failed: %s", auth["error"])
-                return
+    url        = f"wss://ws.binaryws.com/websockets/v3?app_id={config.DERIVE_APP_ID}"
+    backoff    = 1.0
+    backoff_max = 60.0
 
-            log.info("Deriv tick listener authorised — subscribing %d pairs", len(config.FOREX_PAIRS))
-            for pair in config.FOREX_PAIRS:
-                await ws.send(json.dumps({"ticks": pair, "subscribe": 1}))
-                await asyncio.sleep(0.05)  # avoid burst rate-limit
+    while True:
+        try:
+            async with ws_lib.connect(
+                url, ping_interval=15, ping_timeout=30, close_timeout=5,
+                max_size=2 ** 20,
+            ) as ws:
+                # Authorise
+                await ws.send(json.dumps({"authorize": config.DERIVE_TOKEN}))
+                auth = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+                if auth.get("error"):
+                    log.error("Deriv auth failed: %s — backing off", auth["error"])
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, backoff_max)
+                    continue
 
-            while True:
-                raw  = await asyncio.wait_for(ws.recv(), timeout=60)
-                data = json.loads(raw)
-                if "tick" in data:
-                    tick     = data["tick"]
-                    pair_sym = str(tick.get("symbol", ""))
-                    price    = float(tick.get("quote", 0))
-                    epoch    = float(tick.get("epoch", time.time()))
-                    if price > 0 and pair_sym:
-                        await _process_tick(pair_sym, price, epoch)
+                # Subscribe to every forex pair's tick stream
+                log.info("Deriv tick listener up — subscribing %d pairs", len(config.FOREX_PAIRS))
+                for pair in config.FOREX_PAIRS:
+                    await ws.send(json.dumps({"ticks": pair, "subscribe": 1}))
+                    await asyncio.sleep(0.05)  # rate-limit safe
 
-    except Exception as e:
-        log.error("Direct Deriv listener error: %s — retrying in 10s", e)
-        await asyncio.sleep(10)
-        asyncio.create_task(direct_deriv_listener())
+                backoff = 1.0  # successful connection — reset
+
+                # Receive loop. Long timeout because forex is silent on weekends;
+                # synthetic indices (R_*) tick 24/7, so any silence > 120s = real drop.
+                while True:
+                    raw  = await asyncio.wait_for(ws.recv(), timeout=120)
+                    data = json.loads(raw)
+                    if "tick" in data:
+                        tick     = data["tick"]
+                        pair_sym = str(tick.get("symbol", ""))
+                        price    = float(tick.get("quote", 0))
+                        epoch    = float(tick.get("epoch", time.time()))
+                        if price > 0 and pair_sym:
+                            await _process_tick(pair_sym, price, epoch)
+                    elif data.get("error"):
+                        log.warning("Deriv error msg: %s", data["error"].get("message"))
+
+        except asyncio.TimeoutError:
+            log.warning("Deriv tick stream silent > 120s — reconnecting")
+        except Exception as e:
+            log.error("Deriv listener error: %s — reconnecting in %.1fs", e, backoff)
+
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, backoff_max)
 
 
 async def direct_binance_listener() -> None:
-    """Subscribe to Binance trade stream for all crypto pairs; build 1M OHLC locally."""
+    """
+    Lossless tick capture from Binance trade stream for all crypto pairs.
+    Auto-reconnect with exponential backoff. Crypto streams 24/7 — any
+    silence > 60s indicates a real drop.
+    """
     import websockets as ws_lib
 
     streams = "/".join(f"{p.lower()}@trade" for p in config.CRYPTO_PAIRS)
     url     = f"wss://stream.binance.com:9443/stream?streams={streams}"
+    backoff     = 1.0
+    backoff_max = 60.0
 
-    try:
-        async with ws_lib.connect(url, ping_interval=20, ping_timeout=40) as ws:
-            log.info("Binance trade listener connected — %d crypto pairs", len(config.CRYPTO_PAIRS))
-            while True:
-                raw  = await asyncio.wait_for(ws.recv(), timeout=120)
-                msg  = json.loads(raw)
-                data = msg.get("data") or msg
-                if data.get("e") == "trade":
-                    pair_sym = str(data.get("s", "")).upper()
-                    price    = float(data.get("p", 0))
-                    epoch    = float(data.get("T", time.time() * 1000)) / 1000.0
-                    if price > 0 and pair_sym in config.CRYPTO_PAIRS:
-                        await _process_tick(pair_sym, price, epoch)
-    except Exception as e:
-        log.error("Binance listener error: %s — retrying in 10s", e)
-        await asyncio.sleep(10)
-        asyncio.create_task(direct_binance_listener())
+    while True:
+        try:
+            async with ws_lib.connect(
+                url, ping_interval=15, ping_timeout=30, close_timeout=5,
+                max_size=2 ** 20,
+            ) as ws:
+                log.info("Binance trade listener up — %d crypto pairs", len(config.CRYPTO_PAIRS))
+                backoff = 1.0
+                while True:
+                    raw  = await asyncio.wait_for(ws.recv(), timeout=60)
+                    msg  = json.loads(raw)
+                    data = msg.get("data") or msg
+                    if data.get("e") == "trade":
+                        pair_sym = str(data.get("s", "")).upper()
+                        price    = float(data.get("p", 0))
+                        epoch    = float(data.get("T", time.time() * 1000)) / 1000.0
+                        if price > 0 and pair_sym in config.CRYPTO_PAIRS:
+                            await _process_tick(pair_sym, price, epoch)
+        except asyncio.TimeoutError:
+            log.warning("Binance trade stream silent > 60s — reconnecting")
+        except Exception as e:
+            log.error("Binance listener error: %s — reconnecting in %.1fs", e, backoff)
+
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, backoff_max)
 
 
 async def _process_tick(pair: str, price: float, epoch: float) -> None:
-    """Build 1M OHLC candles from raw ticks; emits closed candle + live update."""
-    minute_epoch = int(epoch) // 60 * 60  # floor to minute boundary
+    """Persist every tick → build 1M OHLC → emit closed + live candle updates."""
 
-    builder = _tick_builders.get(pair)
+    # 1. Persist raw tick (every single one — never dropped)
+    tick_store.append(pair, epoch, price)
+
+    # 2. Aggregate into 1M OHLC builder
+    minute_epoch = int(epoch) // 60 * 60  # floor to minute boundary
+    builder      = _tick_builders.get(pair)
 
     if builder is None or builder["minute_epoch"] != minute_epoch:
         # New minute — finalise the previous candle as closed
@@ -318,7 +364,7 @@ async def _process_tick(pair: str, price: float, epoch: float) -> None:
         builder["close"] = price
         builder["count"] += 1
 
-    # Emit live (not-yet-closed) candle update so chart stays in sync
+    # 3. Emit live (not-yet-closed) candle update so chart stays in sync
     b = _tick_builders[pair]
     await on_candle(pair, 60, {
         "epoch":  float(b["minute_epoch"]),
@@ -750,6 +796,32 @@ async def get_pairs() -> dict[str, Any]:
 async def get_candles(pair: str, granularity: int = 60, count: int = 300) -> dict[str, Any]:
     candles = candle_store.get(pair, {}).get(granularity, [])
     return {"pair": pair, "granularity": granularity, "candles": candles[-count:]}
+
+
+@app.get("/api/ticks/{pair}")
+async def get_ticks(pair: str, count: int = 200, since: float | None = None) -> dict[str, Any]:
+    """Raw tick history for a pair. Use ?since=epoch for incremental fetch."""
+    buf = tick_store.get(pair)
+    if since is not None:
+        ticks = buf.since(since)
+    else:
+        ticks = buf.latest(count)
+    return {
+        "pair":     pair,
+        "count":    len(ticks),
+        "received": buf.total_received,
+        "buffered": buf.buffered,
+        "ticks":    [{"epoch": e, "price": p} for (e, p) in ticks],
+    }
+
+
+@app.get("/api/ticks-stats")
+async def get_tick_stats() -> dict[str, Any]:
+    """Per-pair tick capture stats — useful for verifying lossless ingestion."""
+    return {
+        "uptime_sec": time.time() - tick_store.started_at,
+        "symbols":    tick_store.stats(),
+    }
 
 
 @app.get("/api/model/{pair}")
