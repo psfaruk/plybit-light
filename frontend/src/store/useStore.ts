@@ -45,6 +45,16 @@ export interface ModelStatus {
   n_candles:  number;
 }
 
+export interface SignalMarker {
+  pair:       string;
+  tf:         number;
+  epoch:      number;
+  direction:  "GREEN" | "RED";
+  grade:      string;
+  confidence: number;
+  createdAt:  number;
+}
+
 interface PlaybitState {
   /* Connection */
   connected:   boolean;
@@ -81,6 +91,15 @@ interface PlaybitState {
   /* Block reason — last reason a signal was suppressed by the gate */
   blockReason: string;
   setBlockReason: (r: string) => void;
+
+  /* Signal markers (all pairs/TFs, persisted 24h) */
+  markers:        SignalMarker[];
+  addMarker:      (m: SignalMarker) => void;
+  pruneMarkers:   () => void;
+
+  /* Refresh trigger — bumped to force history refetch */
+  refreshTick:    number;
+  triggerRefresh: () => void;
 }
 
 export const useStore = create<PlaybitState>((set, get) => ({
@@ -125,4 +144,43 @@ export const useStore = create<PlaybitState>((set, get) => ({
 
   blockReason: "",
   setBlockReason: (r) => set({ blockReason: r }),
+
+  markers: loadMarkers(),
+  addMarker: (m) => set((state) => {
+    const exists = state.markers.some(
+      (x) => x.pair === m.pair && x.tf === m.tf && x.epoch === m.epoch,
+    );
+    if (exists) return state;
+    const next = [...state.markers, m];
+    saveMarkers(next);
+    return { markers: next };
+  }),
+  pruneMarkers: () => set((state) => {
+    const now = Date.now();
+    const ttl = 24 * 60 * 60 * 1000;
+    const next = state.markers.filter((m) => now - m.createdAt < ttl);
+    if (next.length === state.markers.length) return state;
+    saveMarkers(next);
+    return { markers: next };
+  }),
+
+  refreshTick:    0,
+  triggerRefresh: () => set((state) => ({ refreshTick: state.refreshTick + 1 })),
 }));
+
+const MARKER_KEY = "playbit_signal_markers_v2";
+
+function loadMarkers(): SignalMarker[] {
+  try {
+    const raw = localStorage.getItem(MARKER_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as SignalMarker[];
+    const now = Date.now();
+    const ttl = 24 * 60 * 60 * 1000;
+    return parsed.filter((m) => now - m.createdAt < ttl);
+  } catch { return []; }
+}
+
+function saveMarkers(list: SignalMarker[]) {
+  try { localStorage.setItem(MARKER_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+}

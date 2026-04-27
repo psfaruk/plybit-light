@@ -73,7 +73,7 @@ MIN_WINDOW_POSITION    = 1
 # ── MTF Analysis ─────────────────────────────────────────────────────
 MTF_ANALYSIS_TFS  = [3600, 900, 300, 120]
 MTF_SIGNAL_TF     = 60
-MTF_MIN_AGREEMENT = 0.60
+MTF_MIN_AGREEMENT = 0.65
 MTF_WEIGHTS       = {"1h": 0.35, "15m": 0.28, "5m": 0.22, "2m": 0.15}
 
 # ── App Timeframes ────────────────────────────────────────────────────

@@ -1,16 +1,17 @@
-import { useEffect, useRef } from "react";
-import { createChart, IChartApi, ISeriesApi, ColorType, CrosshairMode } from "lightweight-charts";
+import { useEffect, useRef, useState } from "react";
+import { createChart, IChartApi, ISeriesApi, ColorType, CrosshairMode, SeriesMarker, Time } from "lightweight-charts";
 import { useStore } from "../store/useStore";
+import { CandleTimer } from "./CandleTimer";
 import styles from "./CandleChart.module.css";
 
 function isForexMarketClosed(pair: string): boolean {
   if (pair.startsWith("BTC") || pair.startsWith("ETH") || pair.endsWith("USDT")) return false;
   const now  = new Date();
-  const dow  = now.getUTCDay();    // 0=Sun, 6=Sat
+  const dow  = now.getUTCDay();
   const h    = now.getUTCHours();
-  if (dow === 5 && h >= 21) return true;  // Friday ≥ 21:00 UTC
-  if (dow === 6) return true;              // Saturday
-  if (dow === 0 && h < 21) return true;   // Sunday < 21:00 UTC
+  if (dow === 5 && h >= 21) return true;
+  if (dow === 6) return true;
+  if (dow === 0 && h < 21) return true;
   return false;
 }
 
@@ -21,13 +22,10 @@ export function CandleChart() {
   const ema5Ref  = useRef<ISeriesApi<"Line"> | null>(null);
   const ema20Ref = useRef<ISeriesApi<"Line"> | null>(null);
 
-  // Track last (pair, tf, count) for which we did a full setData. While
-  // unchanged, only the latest candle is updated via series.update() — much
-  // faster, doesn't fight user pan/zoom.
-  const lastFullKeyRef  = useRef<string>("");
-  const lastEpochRef    = useRef<number>(0);
+  const lastFullKeyRef = useRef<string>("");
+  const [priceY, setPriceY] = useState<number | null>(null);
 
-  const { candles, activeTf, activePair, signal } = useStore();
+  const { candles, activeTf, activePair, signal, markers, addMarker, pruneMarkers } = useStore();
   const isLoading = (candles[activeTf] ?? []).length === 0;
 
   // Init chart
@@ -37,8 +35,9 @@ export function CandleChart() {
     const chart = createChart(containerRef.current, {
       layout: {
         background: { type: ColorType.Solid, color: "#080d14" },
-        textColor:  "#4a607a",
-        fontFamily: "'JetBrains Mono', monospace",
+        textColor:  "#7a8fa6",
+        fontFamily: "'Inter', system-ui, sans-serif",
+        fontSize:   11,
       },
       grid: {
         vertLines:   { color: "#0d1520" },
@@ -78,10 +77,10 @@ export function CandleChart() {
       lastValueVisible: false,
     });
 
-    chartRef.current       = chart;
+    chartRef.current        = chart;
     candleSeriesRef.current = candleSeries;
-    ema5Ref.current        = ema5;
-    ema20Ref.current       = ema20;
+    ema5Ref.current         = ema5;
+    ema20Ref.current        = ema20;
 
     const observer = new ResizeObserver(() => {
       if (containerRef.current) {
@@ -96,12 +95,27 @@ export function CandleChart() {
     };
   }, []);
 
-  // Update candles — incremental: setData on pair/TF change, update() per tick
+  // Apply markers — filtered to current pair + tf, deduped, expired removed
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+    const filtered = markers.filter((m) => m.pair === activePair && m.tf === activeTf);
+    const sorted = filtered.slice().sort((a, b) => a.epoch - b.epoch);
+    const seriesMarkers: SeriesMarker<Time>[] = sorted.map((m) => ({
+      time:     m.epoch as unknown as Time,
+      position: m.direction === "GREEN" ? "belowBar" : "aboveBar",
+      color:    m.direction === "GREEN" ? "#00ff88" : "#ff2d6b",
+      shape:    m.direction === "GREEN" ? "arrowUp" : "arrowDown",
+      text:     `${m.grade} ${Math.round(m.confidence * 100)}%`,
+    }));
+    try { series.setMarkers(seriesMarkers); } catch { /* ignore */ }
+  }, [markers, activePair, activeTf]);
+
+  // Update candles — incremental
   useEffect(() => {
     const raw = candles[activeTf] ?? [];
     if (!candleSeriesRef.current || raw.length === 0) return;
 
-    // Dedupe (keep latest per epoch) then sort ascending
     const byEpoch = new Map<number, typeof raw[number]>();
     for (const c of raw) byEpoch.set(c.epoch, c);
     const cs = Array.from(byEpoch.values()).sort((a, b) => a.epoch - b.epoch);
@@ -111,20 +125,15 @@ export function CandleChart() {
     const isNewSet = fullKey !== lastFullKeyRef.current;
 
     if (isNewSet) {
-      // Full reload: pair changed, TF changed, or new candle appended
       const data = cs.map((c) => ({
-        time:  c.epoch as unknown as import("lightweight-charts").UTCTimestamp,
+        time:  c.epoch as unknown as Time,
         open:  c.open,
         high:  c.high,
         low:   c.low,
         close: c.close,
       }));
-      try {
-        candleSeriesRef.current.setData(data);
-      } catch (e) {
-        console.warn("Chart setData failed:", e);
-        return;
-      }
+      try { candleSeriesRef.current.setData(data); }
+      catch (e) { console.warn("Chart setData failed:", e); return; }
       lastFullKeyRef.current = fullKey;
 
       if (cs.length >= 20) {
@@ -133,23 +142,21 @@ export function CandleChart() {
         const ema20d = calcEMA(closes, 20);
         ema5Ref.current?.setData(
           cs.map((c, i) => ({
-            time:  c.epoch as unknown as import("lightweight-charts").UTCTimestamp,
+            time:  c.epoch as unknown as Time,
             value: ema5d[i] ?? 0,
           })).filter((d) => d.value !== 0)
         );
         ema20Ref.current?.setData(
           cs.map((c, i) => ({
-            time:  c.epoch as unknown as import("lightweight-charts").UTCTimestamp,
+            time:  c.epoch as unknown as Time,
             value: ema20d[i] ?? 0,
           })).filter((d) => d.value !== 0)
         );
       }
     } else {
-      // Same set, last candle just got a new tick — update only that bar.
-      // Doesn't disturb user pan/zoom.
       try {
         candleSeriesRef.current.update({
-          time:  last.epoch as unknown as import("lightweight-charts").UTCTimestamp,
+          time:  last.epoch as unknown as Time,
           open:  last.open,
           high:  last.high,
           low:   last.low,
@@ -158,34 +165,54 @@ export function CandleChart() {
       } catch {/* ignore */}
     }
 
-    lastEpochRef.current = last.epoch;
+    // Update price-line Y for the floating timer
+    const series = candleSeriesRef.current;
+    if (series) {
+      try {
+        const y = series.priceToCoordinate(last.close);
+        if (typeof y === "number" && Number.isFinite(y)) {
+          setPriceY(y);
+        }
+      } catch { /* ignore */ }
+    }
   }, [candles, activeTf, activePair]);
 
-  // Auto-scroll to latest only when pair/TF changes — leaves user free to pan
+  // Auto-scroll on pair/tf change
   useEffect(() => {
     chartRef.current?.timeScale().scrollToRealTime();
   }, [activePair, activeTf]);
 
-  // Signal arrow markers
+  // When a signal arrives, persist a marker (also handled in useWebSocket
+  // for other pairs; this is the active-pair fallback)
   useEffect(() => {
-    if (!signal || !candleSeriesRef.current || signal.signal === "SKIP") return;
+    if (!signal || signal.signal === "SKIP") return;
     const cs = candles[activeTf] ?? [];
     if (!cs.length) return;
     const last = cs[cs.length - 1];
-    candleSeriesRef.current.setMarkers([{
-      time:     last.epoch as unknown as import("lightweight-charts").UTCTimestamp,
-      position: signal.signal === "GREEN" ? "belowBar" : "aboveBar",
-      color:    signal.signal === "GREEN" ? "#00ff88" : "#ff2d6b",
-      shape:    signal.signal === "GREEN" ? "arrowUp"  : "arrowDown",
-      text:     `${signal.grade} ${Math.round(signal.confidence * 100)}%`,
-    }]);
+    addMarker({
+      pair:       activePair,
+      tf:         activeTf,
+      epoch:      last.epoch,
+      direction:  signal.signal,
+      grade:      signal.grade,
+      confidence: signal.confidence,
+      createdAt:  Date.now(),
+    });
   }, [signal]);
+
+  // Periodic cleanup of expired markers
+  useEffect(() => {
+    const id = setInterval(pruneMarkers, 60 * 1000);
+    return () => clearInterval(id);
+  }, [pruneMarkers]);
 
   const marketClosed = isForexMarketClosed(activePair);
 
   return (
     <div className={styles.wrapper}>
       <div ref={containerRef} className={styles.canvas} />
+
+      {!isLoading && priceY !== null && <CandleTimer top={priceY} />}
 
       {isLoading && (
         <div className={styles.loadingOverlay}>

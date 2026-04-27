@@ -1,4 +1,12 @@
-"""4-Layer Signal Scoring System → confidence + grade."""
+"""4-Layer Signal Scoring System → confidence + grade.
+
+Plan layers (Master Plan v6.0):
+  Layer 1 — MTF Alignment        max 45 pts
+  Layer 2 — SMC/ICT context      max 30 pts (+ bonuses)
+  Layer 3 — Candle Reaction      max 25 pts (+ bonuses)
+  Layer 4 — AI Ensemble          max 30 pts (+ bonus)
+  FINAL = total / 160 (per plan, leaves headroom for bonuses)
+"""
 
 from config import GRADE_ELITE, GRADE_HIGH, GRADE_MODERATE
 
@@ -13,12 +21,9 @@ def score_to_confidence(
     kalman_agree: bool,
     kalman_vel:   float,
 ) -> float:
-    """
-    Combine 4 scoring layers into a final confidence [0, 1].
-    Max possible: 45 + 30 + 25 + 30 = 130 pts (generous headroom).
-    """
+    """Combine 4 scoring layers into a final confidence [0, 1]."""
     raw_total = mtf_pts + smc_pts + reaction_pts + ai_pts
-    max_pts   = 130.0
+    max_pts   = 160.0  # per plan v6.0 (was 130 — allows bonus headroom)
 
     confidence = raw_total / max_pts
 
@@ -30,8 +35,8 @@ def score_to_confidence(
     if adx < 15:
         confidence *= 0.55
 
-    # Kalman noise filter
-    if kalman_vel < 1e-5:
+    # Kalman noise filter — uses ABS velocity (negative trend has |vel|>0)
+    if abs(kalman_vel) < 1e-5:
         confidence *= 0.70
 
     # Kalman trend agreement
@@ -141,8 +146,16 @@ def grade(confidence: float) -> str:
     return "SKIP"
 
 
-def consensus_check(feat: dict[str, float], direction: str) -> int:
-    """8-check consensus filter. Returns score 0-8."""
+def consensus_check(
+    feat: dict[str, object],
+    direction: str,
+    pattern_present: bool = False,
+) -> int:
+    """8-check consensus filter per plan. Returns score 0-8.
+
+    GREEN: RSI<65, MACD>0, BB<0.75, Stoch<80, EMA5>EMA20, ADX>20, Pattern✓, SMC✓
+    RED:   inverted thresholds.
+    """
     score = 0
     is_bull = direction == "GREEN"
 
@@ -163,7 +176,7 @@ def consensus_check(feat: dict[str, float], direction: str) -> int:
         score += int(ema5 > ema20)
         score += int(adx > 20)
         score += int(net > 0)
-        score += 1  # pattern placeholder
+        score += int(pattern_present)
     else:
         score += int(rsi14 > 35)
         score += int(macd_h < 0)
@@ -172,7 +185,7 @@ def consensus_check(feat: dict[str, float], direction: str) -> int:
         score += int(ema5 < ema20)
         score += int(adx > 20)
         score += int(net < 0)
-        score += 1
+        score += int(pattern_present)
 
     return score
 

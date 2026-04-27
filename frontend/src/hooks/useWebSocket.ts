@@ -8,10 +8,14 @@ const API_BASE = import.meta.env.VITE_API_URL ??
   `${location.protocol}//${location.host}`;
 
 export function useWebSocket() {
-  const { activePair, activeTf, setConnected, addCandle, setHistory, setSignal, setModelStatus, setBlockReason } = useStore();
+  const {
+    activePair, activeTf, refreshTick,
+    setConnected, addCandle, setHistory,
+    setSignal, setModelStatus, setBlockReason, addMarker,
+  } = useStore();
   const ws = useRef<WebSocket | null>(null);
 
-  // Fetch history via REST whenever pair or timeframe changes
+  // Fetch history via REST whenever pair, timeframe, or refresh tick changes
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -24,7 +28,7 @@ export function useWebSocket() {
       } catch {/* ignore */}
     })();
     return () => { cancelled = true; };
-  }, [activePair, activeTf]);
+  }, [activePair, activeTf, refreshTick]);
 
   useEffect(() => {
     let active = true;
@@ -61,16 +65,41 @@ export function useWebSocket() {
     }
 
     function handleMessage(msg: Record<string, unknown>) {
-      // Backend broadcasts updates for ALL pairs to every client.
-      // Filter so this chart only renders the symbol the user is viewing.
       const msgPair = msg.pair as string | undefined;
-      const pairScoped = msg.type === "history" || msg.type === "candle_update"
-        || msg.type === "candle_closed" || msg.type === "signal"
-        || msg.type === "signal_blocked"
-        || msg.type === "model_status" || msg.type === "model_retrained";
+      const msgType = msg.type as string;
+
+      // ── Signals: capture markers for ALL pairs (Telegram parity) ──
+      // Backend broadcasts signals for every pair; we want chart arrows
+      // to appear when the user later switches to that pair.
+      if (msgType === "signal" && msgPair) {
+        const sig = msg as unknown as { signal?: string; grade?: string; confidence?: number; pair?: string };
+        if (sig.signal === "GREEN" || sig.signal === "RED") {
+          // Use the most-recent candle epoch for this pair to anchor the arrow
+          // (we only have access to active-pair candles here; backend includes
+          //  candle_open_time in the payload for cross-pair anchoring).
+          const epoch = (msg.candle_open_time as number | undefined) ??
+                        (msg.epoch as number | undefined) ??
+                        Math.floor(Date.now() / 1000 / 60) * 60;
+          addMarker({
+            pair:       sig.pair ?? msgPair,
+            tf:         60,
+            epoch,
+            direction:  sig.signal,
+            grade:      sig.grade ?? "MODERATE",
+            confidence: sig.confidence ?? 0,
+            createdAt:  Date.now(),
+          });
+        }
+      }
+
+      // Pair-scoped messages — only for the chart we're viewing
+      const pairScoped = msgType === "history" || msgType === "candle_update"
+        || msgType === "candle_closed" || msgType === "signal"
+        || msgType === "signal_blocked"
+        || msgType === "model_status" || msgType === "model_retrained";
       if (pairScoped && msgPair && msgPair !== activePair) return;
 
-      switch (msg.type) {
+      switch (msgType) {
         case "history": {
           const gran = (msg.granularity as number) ?? 60;
           setHistory(gran, (msg.candles as Parameters<typeof setHistory>[1]) ?? []);
@@ -118,7 +147,6 @@ export function useWebSocket() {
       clearTimeout(retryTimer);
       const current = ws.current;
       if (current) {
-        // Defer close if still CONNECTING to avoid the browser error
         if (current.readyState === WebSocket.CONNECTING) {
           current.onopen = () => current.close();
         } else {

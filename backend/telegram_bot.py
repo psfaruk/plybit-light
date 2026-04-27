@@ -71,8 +71,13 @@ def _format_message(signal: dict[str, object], pair: str) -> str:
 
     top_models = ""
     if isinstance(models, dict):
-        sorted_m = sorted(models.items(), key=lambda x: x[1], reverse=True)[:3]
-        top_models = " | ".join(f"{k.upper()} {int(v*100)}%" for k, v in sorted_m)
+        # Show top models *aligned with the signal direction*. For RED, the
+        # most confident model is the one with the lowest raw prob (= highest
+        # bearish prob); convert to direction-aligned percentage first.
+        is_green = d == "GREEN"
+        aligned = [(k, (v if is_green else 1.0 - v)) for k, v in models.items()]
+        aligned.sort(key=lambda x: x[1], reverse=True)
+        top_models = " | ".join(f"{k.upper()} {int(v*100)}%" for k, v in aligned[:3])
 
     pattern_line = ", ".join(str(p) for p in patterns[:3]) if patterns else ""
 

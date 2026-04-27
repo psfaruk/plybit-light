@@ -9,7 +9,23 @@ const GRADE_COLOR: Record<string, string> = {
 };
 
 const GRADE_ICON: Record<string, string> = {
-  ELITE: "👑", HIGH: "✅", MODERATE: "⚡",
+  ELITE: "★", HIGH: "✓", MODERATE: "•",
+};
+
+const MODEL_LABELS: Record<string, string> = {
+  xgb:     "XGBoost",
+  lgbm:    "LightGBM",
+  catboost:"CatBoost",
+  rf:      "Random Forest",
+  extra:   "ExtraTrees",
+  histgb:  "HistGB",
+  lstm:    "LSTM+GRU",
+  cnn:     "CNN-LSTM",
+  attn:    "Attention",
+  tcn:     "TCN",
+  nbeats:  "N-BEATS",
+  rule:    "Rule Engine",
+  bayes:   "Bayesian NN",
 };
 
 function ConfidenceBar({ value, color }: { value: number; color: string }) {
@@ -85,6 +101,21 @@ export function SignalPanel() {
   const react = signal.candle_reaction ?? {};
   const tfs   = (mtf.tfs ?? {}) as Record<string, { bias: string; strength: number }>;
 
+  // Model consensus calculations
+  const models = signal.ai_models ?? {};
+  const modelEntries = Object.entries(models);
+  const totalModels = modelEntries.length;
+  const acceptingModels = modelEntries.filter(([, p]) =>
+    isGreen ? p > 0.5 : p < 0.5,
+  );
+  const acceptCount = acceptingModels.length;
+  const acceptPct = totalModels > 0 ? (acceptCount / totalModels) * 100 : 0;
+  const avgAcceptConf =
+    acceptingModels.length > 0
+      ? acceptingModels.reduce((sum, [, p]) => sum + (isGreen ? p : 1 - p), 0) /
+        acceptingModels.length
+      : 0;
+
   return (
     <AnimatePresence mode="wait">
       <motion.div
@@ -115,12 +146,60 @@ export function SignalPanel() {
 
         <div className={styles.tradeInfo}>
           <span>Trade: <b>Time Candle {signal.expiry_bars}M</b></span>
-          <span className={styles.delay}>⚡ Max delay: {signal.max_delay_sec}s</span>
+          <span className={styles.delay}>Max delay: {signal.max_delay_sec}s</span>
         </div>
+
+        {/* AI Confirmation summary */}
+        {totalModels > 0 && (
+          <div className={styles.section}>
+            <div className={styles.sectionLabel}>AI Confirmation</div>
+            <div className={styles.consensusRow}>
+              <div className={styles.consensusBig} style={{ color }}>
+                {acceptCount}/{totalModels}
+              </div>
+              <div className={styles.consensusMeta}>
+                <div className={styles.consensusPct} style={{ color }}>
+                  {Math.round(acceptPct)}% models accepted
+                </div>
+                <div className={styles.consensusAvg}>
+                  Avg confidence: {Math.round(avgAcceptConf * 100)}%
+                </div>
+              </div>
+            </div>
+            <div className={styles.modelList}>
+              {modelEntries
+                .slice()
+                .sort((a, b) => Math.abs(b[1] - 0.5) - Math.abs(a[1] - 0.5))
+                .map(([key, prob]) => {
+                  const accepts = isGreen ? prob > 0.5 : prob < 0.5;
+                  const dirPct = isGreen
+                    ? Math.round(prob * 100)
+                    : Math.round((1 - prob) * 100);
+                  return (
+                    <div key={key} className={styles.modelChip}>
+                      <span
+                        className={styles.modelDot}
+                        style={{ background: accepts ? "var(--green-neon)" : "var(--red-neon)" }}
+                      />
+                      <span className={styles.modelName}>
+                        {MODEL_LABELS[key] ?? key.toUpperCase()}
+                      </span>
+                      <span
+                        className={styles.modelPct}
+                        style={{ color: accepts ? color : "var(--muted)" }}
+                      >
+                        {dirPct}%
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        )}
 
         {/* MTF */}
         <div className={styles.section}>
-          <div className={styles.sectionLabel}>📊 MTF Alignment</div>
+          <div className={styles.sectionLabel}>MTF Alignment</div>
           <div className={styles.tfRow}>
             {Object.entries(tfs).map(([tf, v]) => (
               <div
@@ -133,13 +212,13 @@ export function SignalPanel() {
             ))}
           </div>
           {mtf.in_killzone && (
-            <div className={styles.kzBadge}>⚡ {String(mtf.killzone).toUpperCase()} Killzone Active</div>
+            <div className={styles.kzBadge}>{String(mtf.killzone).toUpperCase()} Killzone Active</div>
           )}
         </div>
 
         {/* Candle Reaction */}
         <div className={styles.section}>
-          <div className={styles.sectionLabel}>⚡ Candle Reaction</div>
+          <div className={styles.sectionLabel}>Candle Reaction</div>
           <div className={styles.reactionRow}>
             <div>
               <span className={styles.reactionLabel}>Bull</span>
@@ -157,15 +236,15 @@ export function SignalPanel() {
             </div>
           </div>
           <div className={styles.reactionFlags}>
-            {react.pin_bar ? <span className={styles.flag}>PIN✓</span> : null}
-            {react.engulfing ? <span className={styles.flag}>ENGULF✓</span> : null}
+            {react.pin_bar ? <span className={styles.flag}>PIN</span> : null}
+            {react.engulfing ? <span className={styles.flag}>ENGULF</span> : null}
           </div>
         </div>
 
         {/* Patterns */}
         {signal.patterns?.length > 0 && (
           <div className={styles.section}>
-            <div className={styles.sectionLabel}>📐 Patterns</div>
+            <div className={styles.sectionLabel}>Patterns</div>
             <div className={styles.patternList}>
               {signal.patterns.slice(0, 4).map((p) => (
                 <span key={p} className={styles.patternBadge}>{p.replace(/_/g, " ")}</span>

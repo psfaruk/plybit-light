@@ -27,7 +27,7 @@
   font-family:   var(--font-display);
   font-size:     14px;
   font-weight:   700;
-  letter-spacing:3px;
+  letter-spacing:1.5px;
   color:         var(--blue-neon);
   text-shadow:   var(--shadow-blue);
 }
@@ -40,7 +40,7 @@
 .pairLabel {
   font-family:   var(--font-display);
   font-size:     12px;
-  letter-spacing:2px;
+  letter-spacing:1px;
   color:         var(--white-soft);
 }
 .headerRight {
@@ -58,7 +58,7 @@
 .liveLabel {
   font-family:   var(--font-display);
   font-size:     9px;
-  letter-spacing:2px;
+  letter-spacing:1px;
   color:         var(--muted);
 }
 .accuracyBadge {
@@ -79,6 +79,7 @@
   align-items:   center;
   padding:       0 var(--sp-4);
   flex-shrink:   0;
+  overflow-x:    auto;
 }
 
 /* ── Main layout ── */
@@ -87,11 +88,13 @@
   display:        grid;
   grid-template-columns: 1fr 340px;
   overflow:       hidden;
+  min-height:     0;
 }
 .chartSection {
   border-right:  1px solid rgba(255,255,255,0.05);
   overflow:      hidden;
   position:      relative;
+  min-height:    0;
 }
 .sidebar {
   display:       flex;
@@ -100,13 +103,54 @@
   padding:       var(--sp-3);
   overflow-y:    auto;
   background:    var(--bg-base);
+  min-height:    0;
 }
 .signalWrap { flex-shrink: 0; }
 .windowWrap { flex-shrink: 0; }
 .modelWrap  { flex: 1; min-height: 0; overflow: hidden; }
 
-/* Responsive */
+/* Tablet — narrower right column */
+@media (max-width: 1024px) {
+  .main { grid-template-columns: 1fr 280px; }
+}
+
+/* Mobile — chart on top (smaller), signal panel + models below */
 @media (max-width: 768px) {
-  .main { grid-template-columns: 1fr; }
-  .sidebar { display: none; }
+  .main {
+    grid-template-columns: 1fr;
+    grid-template-rows: 45vh 1fr;
+    overflow-y: auto;
+  }
+  .chartSection {
+    border-right: none;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    min-height: 280px;
+  }
+  .sidebar {
+    display: flex;
+    padding: var(--sp-2);
+    gap:     var(--sp-2);
+    overflow-y: visible;
+  }
+  .modelWrap {
+    flex: 0 0 auto;
+    overflow: visible;
+    min-height: 200px;
+  }
+  .header {
+    padding: 0 var(--sp-2);
+    gap:     var(--sp-2);
+  }
+  .logoText { font-size: 12px; letter-spacing: 1px; }
+  .pairLabel { font-size: 11px; }
+  .tfBar { padding: 0 var(--sp-2); }
+}
+
+@media (max-width: 480px) {
+  .main {
+    grid-template-rows: 40vh 1fr;
+  }
+  .chartSection {
+    min-height: 240px;
+  }
 }

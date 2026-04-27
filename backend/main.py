@@ -78,9 +78,10 @@ loss_streak:     dict[str, int]              = {}
 # tick builders: pair → current 1M candle being assembled from raw ticks
 _tick_builders:  dict[str, dict]             = {}
 
-# throttle live tick broadcasts (closed candles always pass through)
+# throttle live tick broadcasts (closed candles always pass through).
+# Reduced to 50 ms so candle wicks/closes update at near-real-time on the chart.
 _last_live_broadcast: dict[str, float]       = {}
-_LIVE_BROADCAST_INTERVAL = 0.5  # seconds between live tick broadcasts per pair
+_LIVE_BROADCAST_INTERVAL = 0.05  # 50 ms — milli-second-class live ticks
 
 # active WebSocket clients
 ws_clients: set[WebSocket] = set()
@@ -260,7 +261,7 @@ async def direct_deriv_listener() -> None:
                 log.info("Deriv tick listener up — subscribing %d pairs", len(config.FOREX_PAIRS))
                 for pair in config.FOREX_PAIRS:
                     await ws.send(json.dumps({"ticks": pair, "subscribe": 1}))
-                    await asyncio.sleep(0.05)  # rate-limit safe
+                    await asyncio.sleep(0.02)  # rate-limit safe (Deriv allows ~50/s)
 
                 backoff = 1.0  # successful connection — reset
 
@@ -565,6 +566,9 @@ async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
             return  # window full
 
         signal["window_plan"] = ws_sel.get_window_plan() if ws_sel else []
+        signal["candle_open_time"]  = epoch
+        signal["candle_close_time"] = epoch + 60
+        signal["timestamp"] = time.time()
 
         await broadcast({"type": "signal", "pair": pair, **signal})
 
@@ -657,6 +661,49 @@ async def _run_signal_pipeline(
     if direction == "SKIP":
         return _skip_signal("no_consensus")
 
+    # ── MTF directional alignment (per Master Plan §9) ───────
+    # Plan rule: "1H Master Bias" is the most important filter. Trading against
+    # 1H is forbidden. Aggregate MTF direction must match signal direction.
+    mtf_dir_str = str(mtf.get("direction", "neutral"))
+    expected_mtf = "bull" if direction == "GREEN" else "bear"
+    if mtf_dir_str != "neutral" and mtf_dir_str != expected_mtf:
+        return _skip_signal("mtf_conflict")
+
+    # Hard 1H gate: if the 1H bias is opposite to our signal direction, skip.
+    tfs_map = mtf.get("tfs", {}) or {}
+    if isinstance(tfs_map, dict):
+        h1_bias  = str((tfs_map.get("1h")  or {}).get("bias", "neutral"))
+        m15_bias = str((tfs_map.get("15m") or {}).get("bias", "neutral"))
+        opposing = "bear" if direction == "GREEN" else "bull"
+        if h1_bias == opposing:
+            return _skip_signal("mtf_conflict")
+        # 15M align with 1H is plan's "critical filter"
+        if h1_bias != "neutral" and m15_bias == opposing:
+            return _skip_signal("mtf_conflict")
+
+    # ── Stronger model-agreement gate ────────────────────────
+    # Block weak signals where the model committee is split. We require:
+    #   • ≥ 65% of models to vote in the chosen direction, AND
+    #   • Bayesian uncertainty (std) below 0.20 (model is confident in its mean).
+    # This prevents fragile signals where the fused mean is barely above 0.5.
+    if all_model_probs:
+        agree_threshold = 0.5
+        if direction == "GREEN":
+            agreeing = sum(1 for p in all_model_probs.values() if p > agree_threshold)
+        else:
+            agreeing = sum(1 for p in all_model_probs.values() if p < agree_threshold)
+        agree_ratio = agreeing / len(all_model_probs)
+        if agree_ratio < 0.65:
+            return _skip_signal("no_consensus")
+
+    bayes_std = float(bayes.get("bayes_std", 0.0)) if isinstance(bayes, dict) else 0.0
+    if bayes_std > 0.20:
+        return _skip_signal("no_consensus")
+
+    # Tab + rule must not contradict the fused direction (when both decide)
+    if tab_dir not in ("SKIP", direction) and rule_dir not in ("SKIP", direction):
+        return _skip_signal("no_consensus")
+
     # ── Kalman ───────────────────────────────────────────────
     kf = kalman_filters.get(pair)
     kalman_trend_d = kf.get_trend() if kf else {}
@@ -692,31 +739,48 @@ async def _run_signal_pipeline(
     h_boost = harmonic_confidence_boost(harmonics, direction)
     confidence = min(confidence + h_boost, 0.99)
 
-    # Consensus filter
-    cons_score = consensus_check(feat, direction)
+    # ── Detect direction-aligned patterns BEFORE consensus check ─
+    # Plan §11: pattern_present is one of the 8 consensus checks.
+    pattern_names: list[str] = []
+    if direction == "GREEN":
+        if reaction.get("pin_bull"):
+            pattern_names.append("pin_bar_bull")
+        if reaction.get("bull_engulf"):
+            pattern_names.append("bullish_engulfing")
+    else:
+        if reaction.get("pin_bear"):
+            pattern_names.append("pin_bar_bear")
+        if reaction.get("bear_engulf"):
+            pattern_names.append("bearish_engulfing")
+    for h_name, h_val in harmonics.items():
+        if not h_val:
+            continue
+        # Only count harmonics that point in our direction
+        is_bull_harm = h_name.endswith("_bull")
+        is_bear_harm = h_name.endswith("_bear")
+        if direction == "GREEN" and is_bull_harm:
+            pattern_names.append(h_name)
+        elif direction == "RED" and is_bear_harm:
+            pattern_names.append(h_name)
+    pattern_present = len(pattern_names) > 0
+
+    # Consensus filter (real pattern check now wired in per plan)
+    cons_score = consensus_check(feat, direction, pattern_present)
     confidence = apply_consensus_penalty(confidence, cons_score)
 
     grade_str = grade(confidence)
     if grade_str == "SKIP":
         return _skip_signal("below_threshold")
 
+    # Hard-confirm gate: reject signals where the 8-check consensus is too low,
+    # even if confidence cleared the moderate threshold. This trades volume for
+    # accuracy — the user explicitly asked for "every signal correct".
+    if cons_score < config.SIGNAL_MIN_EMIT_CONFIRM:
+        return _skip_signal("below_threshold")
+
     # Circuit breaker
     if loss_streak.get(pair, 0) >= 5:
         return _skip_signal("circuit_breaker")
-
-    # Detect patterns list
-    pattern_names: list[str] = []
-    if reaction.get("pin_bull"):
-        pattern_names.append("pin_bar_bull")
-    if reaction.get("pin_bear"):
-        pattern_names.append("pin_bar_bear")
-    if reaction.get("bull_engulf"):
-        pattern_names.append("bullish_engulfing")
-    if reaction.get("bear_engulf"):
-        pattern_names.append("bearish_engulfing")
-    for h_name, h_val in harmonics.items():
-        if h_val:
-            pattern_names.append(h_name)
 
     return {
         "signal":           direction,

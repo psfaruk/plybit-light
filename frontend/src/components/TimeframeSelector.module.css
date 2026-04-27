@@ -23,3 +23,36 @@
   background: rgba(255,255,255,0.08);
   margin: 0 4px;
 }
+
+.refresh {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  background: var(--bg-elevated);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.refresh:hover {
+  color: var(--blue-neon);
+  border-color: var(--blue-neon);
+}
+.refresh:active {
+  transform: scale(0.95);
+}
+.refresh svg {
+  display: block;
+}
+.refresh.spinning svg {
+  animation: tf-refresh-spin 0.6s linear;
+}
+
+@keyframes tf-refresh-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
