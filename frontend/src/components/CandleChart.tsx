@@ -21,6 +21,12 @@ export function CandleChart() {
   const ema5Ref  = useRef<ISeriesApi<"Line"> | null>(null);
   const ema20Ref = useRef<ISeriesApi<"Line"> | null>(null);
 
+  // Track last (pair, tf, count) for which we did a full setData. While
+  // unchanged, only the latest candle is updated via series.update() — much
+  // faster, doesn't fight user pan/zoom.
+  const lastFullKeyRef  = useRef<string>("");
+  const lastEpochRef    = useRef<number>(0);
+
   const { candles, activeTf, activePair, signal } = useStore();
   const isLoading = (candles[activeTf] ?? []).length === 0;
 
@@ -90,7 +96,7 @@ export function CandleChart() {
     };
   }, []);
 
-  // Update candles — sort + dedupe by epoch to avoid lightweight-charts crashes
+  // Update candles — incremental: setData on pair/TF change, update() per tick
   useEffect(() => {
     const raw = candles[activeTf] ?? [];
     if (!candleSeriesRef.current || raw.length === 0) return;
@@ -100,42 +106,65 @@ export function CandleChart() {
     for (const c of raw) byEpoch.set(c.epoch, c);
     const cs = Array.from(byEpoch.values()).sort((a, b) => a.epoch - b.epoch);
 
-    const data = cs.map((c) => ({
-      time:  c.epoch as unknown as import("lightweight-charts").UTCTimestamp,
-      open:  c.open,
-      high:  c.high,
-      low:   c.low,
-      close: c.close,
-    }));
+    const last     = cs[cs.length - 1];
+    const fullKey  = `${activePair}:${activeTf}:${cs.length}`;
+    const isNewSet = fullKey !== lastFullKeyRef.current;
 
-    try {
-      candleSeriesRef.current.setData(data);
-    } catch (e) {
-      console.warn("Chart setData failed:", e);
-      return;
+    if (isNewSet) {
+      // Full reload: pair changed, TF changed, or new candle appended
+      const data = cs.map((c) => ({
+        time:  c.epoch as unknown as import("lightweight-charts").UTCTimestamp,
+        open:  c.open,
+        high:  c.high,
+        low:   c.low,
+        close: c.close,
+      }));
+      try {
+        candleSeriesRef.current.setData(data);
+      } catch (e) {
+        console.warn("Chart setData failed:", e);
+        return;
+      }
+      lastFullKeyRef.current = fullKey;
+
+      if (cs.length >= 20) {
+        const closes = cs.map((c) => c.close);
+        const ema5d  = calcEMA(closes, 5);
+        const ema20d = calcEMA(closes, 20);
+        ema5Ref.current?.setData(
+          cs.map((c, i) => ({
+            time:  c.epoch as unknown as import("lightweight-charts").UTCTimestamp,
+            value: ema5d[i] ?? 0,
+          })).filter((d) => d.value !== 0)
+        );
+        ema20Ref.current?.setData(
+          cs.map((c, i) => ({
+            time:  c.epoch as unknown as import("lightweight-charts").UTCTimestamp,
+            value: ema20d[i] ?? 0,
+          })).filter((d) => d.value !== 0)
+        );
+      }
+    } else {
+      // Same set, last candle just got a new tick — update only that bar.
+      // Doesn't disturb user pan/zoom.
+      try {
+        candleSeriesRef.current.update({
+          time:  last.epoch as unknown as import("lightweight-charts").UTCTimestamp,
+          open:  last.open,
+          high:  last.high,
+          low:   last.low,
+          close: last.close,
+        });
+      } catch {/* ignore */}
     }
 
-    if (cs.length >= 20) {
-      const closes = cs.map((c) => c.close);
-      const ema5d  = calcEMA(closes, 5);
-      const ema20d = calcEMA(closes, 20);
+    lastEpochRef.current = last.epoch;
+  }, [candles, activeTf, activePair]);
 
-      ema5Ref.current?.setData(
-        cs.map((c, i) => ({
-          time:  c.epoch as unknown as import("lightweight-charts").UTCTimestamp,
-          value: ema5d[i] ?? 0,
-        })).filter((d) => d.value !== 0)
-      );
-      ema20Ref.current?.setData(
-        cs.map((c, i) => ({
-          time:  c.epoch as unknown as import("lightweight-charts").UTCTimestamp,
-          value: ema20d[i] ?? 0,
-        })).filter((d) => d.value !== 0)
-      );
-    }
-
+  // Auto-scroll to latest only when pair/TF changes — leaves user free to pan
+  useEffect(() => {
     chartRef.current?.timeScale().scrollToRealTime();
-  }, [candles, activeTf]);
+  }, [activePair, activeTf]);
 
   // Signal arrow markers
   useEffect(() => {

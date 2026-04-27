@@ -288,15 +288,27 @@ async def direct_deriv_listener() -> None:
         backoff = min(backoff * 2, backoff_max)
 
 
+def _to_coinbase(sym: str) -> str:
+    """BTCUSDT → BTC-USD (Coinbase native quote)."""
+    return sym.replace("USDT", "") + "-USD"
+
+
+def _from_coinbase(product_id: str) -> str:
+    """BTC-USD → BTCUSDT (our internal symbol)."""
+    return product_id.replace("-USD", "USDT")
+
+
 async def direct_binance_listener() -> None:
     """
-    Lossless crypto tick capture via Binance.US per-pair trade streams.
-    Uses explicit SUBSCRIBE method to surface errors per symbol, so a single
-    delisted pair doesn't silence the whole stream.
+    Lossless crypto tick capture via Coinbase Exchange WebSocket.
+
+    Function name kept for legacy. Coinbase is a US-based exchange so the WS
+    is reliably accessible from US cloud datacenters (Binance.com → 451,
+    Bybit → 403, Binance.US WS silently filtered on Railway).
     """
     import websockets as ws_lib
 
-    url         = "wss://stream.binance.us:9443/ws"
+    url         = "wss://ws-feed.exchange.coinbase.com"
     backoff     = 1.0
     backoff_max = 60.0
 
@@ -306,32 +318,48 @@ async def direct_binance_listener() -> None:
                 url, ping_interval=15, ping_timeout=30, close_timeout=5,
                 max_size=2 ** 20,
             ) as ws:
-                params = [f"{p.lower()}@trade" for p in config.CRYPTO_PAIRS]
-                await ws.send(json.dumps({"method": "SUBSCRIBE", "params": params, "id": 1}))
-                log.info("Binance.US listener subscribing %d pairs: %s",
-                         len(config.CRYPTO_PAIRS), ",".join(config.CRYPTO_PAIRS))
+                product_ids = [_to_coinbase(p) for p in config.CRYPTO_PAIRS]
+                await ws.send(json.dumps({
+                    "type":        "subscribe",
+                    "product_ids": product_ids,
+                    "channels":    ["matches"],
+                }))
+                log.info("Coinbase listener subscribing %d pairs: %s",
+                         len(product_ids), ",".join(product_ids))
                 backoff = 1.0
 
                 while True:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=90)
+                    raw = await asyncio.wait_for(ws.recv(), timeout=60)
                     msg = json.loads(raw)
+                    mtype = msg.get("type")
 
-                    # SUBSCRIBE ack: {"result":null,"id":1}
-                    if "result" in msg and "id" in msg:
-                        if msg.get("error"):
-                            log.error("Binance.US subscribe error: %s", msg["error"])
+                    if mtype in ("subscriptions", "heartbeat"):
+                        continue
+                    if mtype == "error":
+                        log.error("Coinbase WS error: %s", msg.get("message"))
                         continue
 
-                    if msg.get("e") == "trade":
-                        pair_sym = str(msg.get("s", "")).upper()
-                        price    = float(msg.get("p", 0))
-                        epoch    = float(msg.get("T", time.time() * 1000)) / 1000.0
-                        if price > 0 and pair_sym in config.CRYPTO_PAIRS:
+                    # match (trade) or last_match
+                    if mtype in ("match", "last_match"):
+                        product_id = str(msg.get("product_id", ""))
+                        price      = float(msg.get("price", 0))
+                        time_str   = str(msg.get("time", ""))
+                        if price <= 0 or not product_id:
+                            continue
+                        # Parse ISO 8601 → epoch seconds
+                        try:
+                            from datetime import datetime as _dt
+                            epoch = _dt.fromisoformat(time_str.replace("Z", "+00:00")).timestamp()
+                        except Exception:
+                            epoch = time.time()
+                        pair_sym = _from_coinbase(product_id)
+                        if pair_sym in config.CRYPTO_PAIRS:
                             await _process_tick(pair_sym, price, epoch)
+
         except asyncio.TimeoutError:
-            log.warning("Binance.US stream silent > 90s — reconnecting")
+            log.warning("Coinbase stream silent > 60s — reconnecting")
         except Exception as e:
-            log.error("Binance.US listener error: %s — reconnecting in %.1fs", e, backoff)
+            log.error("Coinbase listener error: %s — reconnecting in %.1fs", e, backoff)
 
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, backoff_max)

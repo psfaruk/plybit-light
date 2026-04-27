@@ -21,3 +21,4 @@ backend/models/*.pkl
 backend/models/*.joblib
 backend/models/*.pt
 backend/models/*.h5
+.claude/
