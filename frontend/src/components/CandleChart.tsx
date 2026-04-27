@@ -21,7 +21,8 @@ export function CandleChart() {
   const ema5Ref  = useRef<ISeriesApi<"Line"> | null>(null);
   const ema20Ref = useRef<ISeriesApi<"Line"> | null>(null);
 
-  const { candles, activeTf, activePair, signal, isLoading } = useStore();
+  const { candles, activeTf, activePair, signal } = useStore();
+  const isLoading = (candles[activeTf] ?? []).length === 0;
 
   // Init chart
   useEffect(() => {
@@ -89,10 +90,15 @@ export function CandleChart() {
     };
   }, []);
 
-  // Update candles
+  // Update candles — sort + dedupe by epoch to avoid lightweight-charts crashes
   useEffect(() => {
-    const cs = candles[activeTf] ?? [];
-    if (!candleSeriesRef.current || cs.length === 0) return;
+    const raw = candles[activeTf] ?? [];
+    if (!candleSeriesRef.current || raw.length === 0) return;
+
+    // Dedupe (keep latest per epoch) then sort ascending
+    const byEpoch = new Map<number, typeof raw[number]>();
+    for (const c of raw) byEpoch.set(c.epoch, c);
+    const cs = Array.from(byEpoch.values()).sort((a, b) => a.epoch - b.epoch);
 
     const data = cs.map((c) => ({
       time:  c.epoch as unknown as import("lightweight-charts").UTCTimestamp,
@@ -102,9 +108,13 @@ export function CandleChart() {
       close: c.close,
     }));
 
-    candleSeriesRef.current.setData(data);
+    try {
+      candleSeriesRef.current.setData(data);
+    } catch (e) {
+      console.warn("Chart setData failed:", e);
+      return;
+    }
 
-    // EMA lines
     if (cs.length >= 20) {
       const closes = cs.map((c) => c.close);
       const ema5d  = calcEMA(closes, 5);

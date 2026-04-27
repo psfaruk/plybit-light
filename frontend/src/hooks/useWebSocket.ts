@@ -43,6 +43,14 @@ export function useWebSocket() {
     }
 
     function handleMessage(msg: Record<string, unknown>) {
+      // Backend broadcasts updates for ALL pairs to every client.
+      // Filter so this chart only renders the symbol the user is viewing.
+      const msgPair = msg.pair as string | undefined;
+      const pairScoped = msg.type === "history" || msg.type === "candle_update"
+        || msg.type === "candle_closed" || msg.type === "signal"
+        || msg.type === "model_status" || msg.type === "model_retrained";
+      if (pairScoped && msgPair && msgPair !== activePair) return;
+
       switch (msg.type) {
         case "history":
           setHistory(60, (msg.candles as Parameters<typeof setHistory>[1]) ?? []);
