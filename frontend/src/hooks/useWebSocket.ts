@@ -9,7 +9,7 @@ const API_BASE = import.meta.env.VITE_API_URL ??
 
 export function useWebSocket() {
   const {
-    activePair, activeTf, refreshTick,
+    activePair, activeTf, refreshTick, signalRefreshTick,
     setConnected, addCandle, setHistory,
     setSignal, setModelStatus, setBlockReason, addMarker,
   } = useStore();
@@ -29,6 +29,22 @@ export function useWebSocket() {
     })();
     return () => { cancelled = true; };
   }, [activePair, activeTf, refreshTick]);
+
+  // Fetch the last cached signal whenever signal-refresh is triggered or pair changes
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/signal/${activePair}`);
+        if (!r.ok) return;
+        const data = await r.json() as { signal?: Record<string, unknown> | null };
+        if (cancelled || !data.signal) return;
+        setSignal(data.signal as unknown as Parameters<typeof setSignal>[0]);
+        setBlockReason("");
+      } catch {/* ignore */}
+    })();
+    return () => { cancelled = true; };
+  }, [activePair, signalRefreshTick]);
 
   useEffect(() => {
     let active = true;

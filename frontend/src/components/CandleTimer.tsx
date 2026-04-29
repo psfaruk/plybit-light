@@ -12,12 +12,7 @@ function formatRemaining(ms: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-interface Props {
-  /** Y-coordinate (px from chart top) of the running price line. */
-  top: number;
-}
-
-export function CandleTimer({ top }: Props) {
+export function CandleTimer() {
   const { activeTf, candles } = useStore();
   const [now, setNow] = useState<number>(() => Date.now());
 
@@ -38,10 +33,8 @@ export function CandleTimer({ top }: Props) {
   const urgent    = remaining < 5000;
 
   return (
-    <div
-      className={`${styles.timer} ${urgent ? styles.urgent : ""}`}
-      style={{ top: `${top}px` }}
-    >
+    <div className={`${styles.timer} ${urgent ? styles.urgent : ""}`}>
+      <div className={styles.label}>NEXT</div>
       <div className={styles.value}>{formatRemaining(remaining)}</div>
       <div className={styles.bar}>
         <div className={styles.fill} style={{ width: `${pct * 100}%` }} />

@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { createChart, IChartApi, ISeriesApi, ColorType, CrosshairMode, SeriesMarker, Time } from "lightweight-charts";
 import { useStore } from "../store/useStore";
-import { CandleTimer } from "./CandleTimer";
 import styles from "./CandleChart.module.css";
 
 function isForexMarketClosed(pair: string): boolean {
@@ -23,7 +22,6 @@ export function CandleChart() {
   const ema20Ref = useRef<ISeriesApi<"Line"> | null>(null);
 
   const lastFullKeyRef = useRef<string>("");
-  const [priceY, setPriceY] = useState<number | null>(null);
 
   const { candles, activeTf, activePair, signal, markers, addMarker, pruneMarkers } = useStore();
   const isLoading = (candles[activeTf] ?? []).length === 0;
@@ -165,16 +163,6 @@ export function CandleChart() {
       } catch {/* ignore */}
     }
 
-    // Update price-line Y for the floating timer
-    const series = candleSeriesRef.current;
-    if (series) {
-      try {
-        const y = series.priceToCoordinate(last.close);
-        if (typeof y === "number" && Number.isFinite(y)) {
-          setPriceY(y);
-        }
-      } catch { /* ignore */ }
-    }
   }, [candles, activeTf, activePair]);
 
   // Auto-scroll on pair/tf change
@@ -211,8 +199,6 @@ export function CandleChart() {
   return (
     <div className={styles.wrapper}>
       <div ref={containerRef} className={styles.canvas} />
-
-      {!isLoading && priceY !== null && <CandleTimer top={priceY} />}
 
       {isLoading && (
         <div className={styles.loadingOverlay}>

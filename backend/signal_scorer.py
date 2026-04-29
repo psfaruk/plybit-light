@@ -143,7 +143,7 @@ def grade(confidence: float) -> str:
         return "HIGH"
     if confidence >= GRADE_MODERATE:
         return "MODERATE"
-    return "SKIP"
+    return "WEAK"
 
 
 def consensus_check(

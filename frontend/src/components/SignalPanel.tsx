@@ -6,10 +6,11 @@ const GRADE_COLOR: Record<string, string> = {
   ELITE:    "var(--gold-neon)",
   HIGH:     "var(--green-neon)",
   MODERATE: "var(--orange-neon)",
+  WEAK:     "var(--muted)",
 };
 
 const GRADE_ICON: Record<string, string> = {
-  ELITE: "★", HIGH: "✓", MODERATE: "•",
+  ELITE: "★", HIGH: "✓", MODERATE: "•", WEAK: "·",
 };
 
 const MODEL_LABELS: Record<string, string> = {

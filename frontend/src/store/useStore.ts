@@ -97,9 +97,12 @@ interface PlaybitState {
   addMarker:      (m: SignalMarker) => void;
   pruneMarkers:   () => void;
 
-  /* Refresh trigger — bumped to force history refetch */
-  refreshTick:    number;
-  triggerRefresh: () => void;
+  /* Refresh triggers */
+  refreshTick:        number;
+  triggerRefresh:     () => void;          // chart history refetch
+  signalRefreshTick:  number;
+  triggerSignalRefresh: () => void;        // refetch last signal from /api/signal
+  clearSignal:        () => void;
 }
 
 export const useStore = create<PlaybitState>((set, get) => ({
@@ -166,6 +169,10 @@ export const useStore = create<PlaybitState>((set, get) => ({
 
   refreshTick:    0,
   triggerRefresh: () => set((state) => ({ refreshTick: state.refreshTick + 1 })),
+
+  signalRefreshTick:    0,
+  triggerSignalRefresh: () => set((state) => ({ signalRefreshTick: state.signalRefreshTick + 1 })),
+  clearSignal: () => set({ signal: null, blockReason: "" }),
 }));
 
 const MARKER_KEY = "playbit_signal_markers_v2";

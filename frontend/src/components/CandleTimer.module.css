@@ -1,34 +1,20 @@
 .timer {
-  position: absolute;
-  /* Sit just to the LEFT of the right price scale, near the price label */
-  right: 64px;
-  /* top is set inline based on price line Y */
-  transform: translateY(-50%);
-  background: rgba(8, 13, 20, 0.92);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(0, 180, 255, 0.35);
-  border-radius: 4px;
-  padding: 3px 7px 5px;
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 64px;
-  z-index: 6;
-  pointer-events: none;
-  transition: top 0.15s linear;
+  align-items: center;
+  gap: 6px;
+  background: rgba(8, 13, 20, 0.85);
+  border: 1px solid rgba(0, 180, 255, 0.30);
+  border-radius: 4px;
+  padding: 3px 8px;
+  height: 26px;
+  flex-shrink: 0;
 }
 
-.timer::after {
-  /* small connector line pointing toward the price label */
-  content: "";
-  position: absolute;
-  right: -8px;
-  top: 50%;
-  width: 8px;
-  height: 1px;
-  background: rgba(0, 180, 255, 0.5);
-  transform: translateY(-50%);
+.label {
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 1px;
+  font-weight: 600;
 }
 
 .value {
@@ -36,14 +22,15 @@
   font-weight: 600;
   color: var(--white-soft);
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.5px;
+  min-width: 38px;
   text-align: center;
 }
 
 .bar {
-  height: 2px;
+  width: 38px;
+  height: 3px;
   background: var(--bg-elevated);
-  border-radius: 1px;
+  border-radius: 2px;
   overflow: hidden;
 }
 
@@ -54,17 +41,14 @@
 }
 
 .urgent {
-  border-color: rgba(255, 45, 107, 0.6);
+  border-color: rgba(255, 45, 107, 0.55);
 }
 .urgent .value { color: var(--red-neon); }
 .urgent .fill  { background: linear-gradient(90deg, var(--orange-neon), var(--red-neon)); }
-.urgent::after { background: rgba(255, 45, 107, 0.6); }
 
 @media (max-width: 480px) {
-  .timer {
-    right: 56px;
-    padding: 2px 6px 4px;
-    min-width: 56px;
-  }
-  .value { font-size: 11px; }
+  .timer { gap: 4px; padding: 2px 6px; }
+  .label { display: none; }
+  .value { font-size: 11px; min-width: 34px; }
+  .bar   { width: 26px; }
 }

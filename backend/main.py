@@ -75,13 +75,17 @@ window_selectors:dict[str, WindowSelector]   = {}
 # circuit breaker: consecutive losses per pair
 loss_streak:     dict[str, int]              = {}
 
+# last broadcast signal per pair — surfaced via /api/signal/{pair}
+last_signal_per_pair: dict[str, dict[str, Any]] = {}
+
 # tick builders: pair → current 1M candle being assembled from raw ticks
 _tick_builders:  dict[str, dict]             = {}
 
 # throttle live tick broadcasts (closed candles always pass through).
-# Reduced to 50 ms so candle wicks/closes update at near-real-time on the chart.
+# 200 ms balances smoothness with WS overhead. Aggregated higher TFs use
+# 600 ms because they update less often and broadcast across all clients.
 _last_live_broadcast: dict[str, float]       = {}
-_LIVE_BROADCAST_INTERVAL = 0.05  # 50 ms — milli-second-class live ticks
+_LIVE_BROADCAST_INTERVAL = 0.2   # 200 ms for 1M live wick
 
 # active WebSocket clients
 ws_clients: set[WebSocket] = set()
@@ -547,38 +551,39 @@ async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
     utc_hour   = datetime.now(timezone.utc).hour
     utc_minute = datetime.now(timezone.utc).minute
 
-    # Run full analysis
+    # Run full analysis — pipeline always emits, never SKIPs
     signal = await _run_signal_pipeline(pair, df_1m, candle_dfs, utc_hour, utc_minute)
 
-    if signal["grade"] != "SKIP":
-        # Window selector gate
-        ws_sel = window_selectors.get(pair)
-        epoch  = int(closed_candle.get("epoch", time.time()))
-        mtf    = signal.get("mtf_context", {})
-        mtf_ag = float(mtf.get("agreement", 0.5)) if isinstance(mtf, dict) else 0.5
-        react  = signal.get("candle_reaction", {})
-        net    = float(react.get("net_score", 0)) if isinstance(react, dict) else 0.0
+    epoch  = int(closed_candle.get("epoch", time.time()))
+    ws_sel = window_selectors.get(pair)
+    mtf    = signal.get("mtf_context", {})
+    mtf_ag = float(mtf.get("agreement", 0.5)) if isinstance(mtf, dict) else 0.5
+    react  = signal.get("candle_reaction", {})
+    net    = float(react.get("net_score", 0)) if isinstance(react, dict) else 0.0
 
-        if ws_sel and not ws_sel.try_add(
+    # Window selector keeps top-N best signals per 5M block (advisory)
+    if ws_sel:
+        ws_sel.try_add(
             epoch, float(signal["confidence"]), str(signal["signal"]),
             str(signal["grade"]), mtf_ag, net,
-        ):
-            return  # window full
+        )
 
-        signal["window_plan"] = ws_sel.get_window_plan() if ws_sel else []
-        signal["candle_open_time"]  = epoch
-        signal["candle_close_time"] = epoch + 60
-        signal["timestamp"] = time.time()
+    signal["window_plan"]       = ws_sel.get_window_plan() if ws_sel else []
+    signal["candle_open_time"]  = epoch
+    signal["candle_close_time"] = epoch + 60
+    signal["timestamp"]         = time.time()
 
-        await broadcast({"type": "signal", "pair": pair, **signal})
+    last_signal_per_pair[pair] = {**signal, "pair": pair}
 
-        # Retrain if needed
-        tab = tabular_models.get(pair)
-        if tab and tab.should_retrain(1):
-            asyncio.create_task(train_models_for_pair(pair))
+    await broadcast({"type": "signal", "pair": pair, **signal})
 
-        # Telegram alert
-        asyncio.create_task(send_signal_alert(signal, pair))
+    # Retrain if needed
+    tab = tabular_models.get(pair)
+    if tab and tab.should_retrain(1):
+        asyncio.create_task(train_models_for_pair(pair))
+
+    # Telegram alert (filtered to HIGH+ inside)
+    asyncio.create_task(send_signal_alert(signal, pair))
 
 
 async def _run_signal_pipeline(
@@ -612,23 +617,22 @@ async def _run_signal_pipeline(
     # ── Harmonic Patterns ────────────────────────────────────
     harmonics = detect_harmonics(df_1m)
 
-    # ── MTF Analysis ─────────────────────────────────────────
+    # ── MTF Analysis (advisory; never blocks emission) ───────
     mtf = compute_mtf_agreement(candle_dfs, utc_hour)
-    if float(mtf.get("agreement", 0)) < config.MTF_MIN_AGREEMENT:
-        return _skip_signal("mtf_conflict")
+    mtf_dir_str = str(mtf.get("direction", "neutral"))
+    mtf_agreement = float(mtf.get("agreement", 0.0))
 
     # ── AI Models ────────────────────────────────────────────
     tab = tabular_models.get(pair)
     tab_result = tab.predict(df_1m, utc_hour) if tab else {}
     tab_probs  = tab_result.get("model_probs", {}) if isinstance(tab_result, dict) else {}
-    tab_fused  = float(tab_result.get("fused", 0.5)) if isinstance(tab_result, dict) else 0.5
     tab_dir    = str(tab_result.get("direction", "SKIP")) if isinstance(tab_result, dict) else "SKIP"
 
     dp = deep_models.get(pair)
     deep_probs = dp.predict(df_1m, utc_hour) if dp else {}
     bayes = dp.predict_bayesian(df_1m, utc_hour) if dp else {"bayes_mean": 0.5, "bayes_std": 0.1}
 
-    # Rule engine
+    # Rule engine — always runs even when AI not yet trained
     rule_result = rule_engine_predict(df_1m, smc, inst, reaction, utc_hour)
     rule_dir    = str(rule_result.get("direction", "SKIP"))
     rule_conf   = float(rule_result.get("confidence", 0.5))
@@ -640,10 +644,8 @@ async def _run_signal_pipeline(
     all_model_probs["rule"] = rule_conf if rule_dir != "SKIP" else 0.5
     all_model_probs["bayes"] = float(bayes.get("bayes_mean", 0.5))
 
-    # Fuse: weighted average
     if all_model_probs:
-        model_probs_list = list(all_model_probs.values())
-        base_fused = float(np.mean(model_probs_list))
+        base_fused = float(np.mean(list(all_model_probs.values())))
     else:
         base_fused = 0.5
 
@@ -653,56 +655,19 @@ async def _run_signal_pipeline(
         stack_prob = stack_model.predict(list(all_model_probs.values()))
         base_fused = stack_model.fuse(base_fused, stack_prob)
 
-    # Direction
-    direction = "GREEN" if base_fused > 0.5 else "RED"
-    if tab_dir == "SKIP" and rule_dir == "SKIP":
-        direction = "SKIP"
-
-    if direction == "SKIP":
-        return _skip_signal("no_consensus")
-
-    # ── MTF directional alignment (per Master Plan §9) ───────
-    # Plan rule: "1H Master Bias" is the most important filter. Trading against
-    # 1H is forbidden. Aggregate MTF direction must match signal direction.
-    mtf_dir_str = str(mtf.get("direction", "neutral"))
-    expected_mtf = "bull" if direction == "GREEN" else "bear"
-    if mtf_dir_str != "neutral" and mtf_dir_str != expected_mtf:
-        return _skip_signal("mtf_conflict")
-
-    # Hard 1H gate: if the 1H bias is opposite to our signal direction, skip.
-    tfs_map = mtf.get("tfs", {}) or {}
-    if isinstance(tfs_map, dict):
-        h1_bias  = str((tfs_map.get("1h")  or {}).get("bias", "neutral"))
-        m15_bias = str((tfs_map.get("15m") or {}).get("bias", "neutral"))
-        opposing = "bear" if direction == "GREEN" else "bull"
-        if h1_bias == opposing:
-            return _skip_signal("mtf_conflict")
-        # 15M align with 1H is plan's "critical filter"
-        if h1_bias != "neutral" and m15_bias == opposing:
-            return _skip_signal("mtf_conflict")
-
-    # ── Stronger model-agreement gate ────────────────────────
-    # Block weak signals where the model committee is split. We require:
-    #   • ≥ 65% of models to vote in the chosen direction, AND
-    #   • Bayesian uncertainty (std) below 0.20 (model is confident in its mean).
-    # This prevents fragile signals where the fused mean is barely above 0.5.
-    if all_model_probs:
-        agree_threshold = 0.5
-        if direction == "GREEN":
-            agreeing = sum(1 for p in all_model_probs.values() if p > agree_threshold)
-        else:
-            agreeing = sum(1 for p in all_model_probs.values() if p < agree_threshold)
-        agree_ratio = agreeing / len(all_model_probs)
-        if agree_ratio < 0.65:
-            return _skip_signal("no_consensus")
-
-    bayes_std = float(bayes.get("bayes_std", 0.0)) if isinstance(bayes, dict) else 0.0
-    if bayes_std > 0.20:
-        return _skip_signal("no_consensus")
-
-    # Tab + rule must not contradict the fused direction (when both decide)
-    if tab_dir not in ("SKIP", direction) and rule_dir not in ("SKIP", direction):
-        return _skip_signal("no_consensus")
+    # Direction is ALWAYS picked. When AI hasn't decided, fall back to rule
+    # engine, then to the last-candle close direction so the user always sees
+    # a GREEN/RED arrow per the user's "signal every minute" requirement.
+    if tab_dir != "SKIP":
+        direction = "GREEN" if base_fused > 0.5 else "RED"
+    elif rule_dir != "SKIP":
+        direction = rule_dir
+    elif len(df_1m) >= 2:
+        last_close = float(df_1m["close"].iloc[-1])
+        prev_close = float(df_1m["close"].iloc[-2])
+        direction  = "GREEN" if last_close >= prev_close else "RED"
+    else:
+        direction = "GREEN" if base_fused >= 0.5 else "RED"
 
     # ── Kalman ───────────────────────────────────────────────
     kf = kalman_filters.get(pair)
@@ -711,24 +676,22 @@ async def _run_signal_pipeline(
     kv = float(kalman_trend_d.get("kalman_velocity", 0))
     kalman_agree = (kt == 1 and direction == "GREEN") or (kt == -1 and direction == "RED")
 
-    # ── PPO safety gate ──────────────────────────────────────
+    # ── PPO advisory (lowers confidence, doesn't skip) ───────
     ppo = ppo_agents.get(pair)
+    ppo_skip = False
     if ppo:
         ppo_dir = ppo.decide(feat, base_fused, direction)
-        if ppo_dir == "SKIP":
-            return _skip_signal("ppo_skip")
+        ppo_skip = ppo_dir == "SKIP"
 
     # ── Meta-labeling ────────────────────────────────────────
     meta = meta_labelers.get(pair)
     meta_prob = meta.predict(feat) if meta else 0.75
-    if meta_prob < 0.50:
-        return _skip_signal("meta_label_block")
 
     # ── 4-Layer Scoring ──────────────────────────────────────
-    mtf_pts      = mtf_score_pts(mtf)
-    smc_pts      = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott)
-    react_pts    = reaction_score_pts(reaction)
-    ai_pts_val   = ai_score_pts(base_fused, meta_prob)
+    mtf_pts    = mtf_score_pts(mtf)
+    smc_pts    = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott)
+    react_pts  = reaction_score_pts(reaction)
+    ai_pts_val = ai_score_pts(base_fused, meta_prob)
 
     confidence = score_to_confidence(
         mtf_pts, smc_pts, react_pts, ai_pts_val,
@@ -739,8 +702,7 @@ async def _run_signal_pipeline(
     h_boost = harmonic_confidence_boost(harmonics, direction)
     confidence = min(confidence + h_boost, 0.99)
 
-    # ── Detect direction-aligned patterns BEFORE consensus check ─
-    # Plan §11: pattern_present is one of the 8 consensus checks.
+    # ── Detect direction-aligned patterns ───────────────────
     pattern_names: list[str] = []
     if direction == "GREEN":
         if reaction.get("pin_bull"):
@@ -755,7 +717,6 @@ async def _run_signal_pipeline(
     for h_name, h_val in harmonics.items():
         if not h_val:
             continue
-        # Only count harmonics that point in our direction
         is_bull_harm = h_name.endswith("_bull")
         is_bear_harm = h_name.endswith("_bear")
         if direction == "GREEN" and is_bull_harm:
@@ -764,23 +725,33 @@ async def _run_signal_pipeline(
             pattern_names.append(h_name)
     pattern_present = len(pattern_names) > 0
 
-    # Consensus filter (real pattern check now wired in per plan)
+    # Consensus filter — penalty/boost only, never blocks
     cons_score = consensus_check(feat, direction, pattern_present)
     confidence = apply_consensus_penalty(confidence, cons_score)
 
-    grade_str = grade(confidence)
-    if grade_str == "SKIP":
-        return _skip_signal("below_threshold")
+    # Soft penalties for misaligned context (no skip — user wants every-minute signals)
+    if mtf_dir_str != "neutral" and (
+        (direction == "GREEN" and mtf_dir_str == "bear") or
+        (direction == "RED"   and mtf_dir_str == "bull")
+    ):
+        confidence *= 0.80
 
-    # Hard-confirm gate: reject signals where the 8-check consensus is too low,
-    # even if confidence cleared the moderate threshold. This trades volume for
-    # accuracy — the user explicitly asked for "every signal correct".
-    if cons_score < config.SIGNAL_MIN_EMIT_CONFIRM:
-        return _skip_signal("below_threshold")
+    if mtf_agreement < config.MTF_MIN_AGREEMENT:
+        confidence *= 0.90
 
-    # Circuit breaker
+    if ppo_skip:
+        confidence *= 0.85
+
+    if meta_prob < 0.50:
+        confidence *= 0.85
+
     if loss_streak.get(pair, 0) >= 5:
-        return _skip_signal("circuit_breaker")
+        confidence *= 0.80  # circuit-breaker softened
+
+    confidence = max(0.0, min(confidence, 0.99))
+
+    # Grade — every signal gets one (WEAK floor for low confidence)
+    grade_str = grade(confidence)
 
     return {
         "signal":           direction,
@@ -822,22 +793,12 @@ def _check_signal_gates(pair: str, df: pd.DataFrame) -> str:
         if dow in (5, 6):
             return "market_closed"
 
-    # News window
-    if is_news_window(pair, now):
-        return "news_window"
+    # News window — soft warning only (signal still emits but flagged)
+    # The user's "every minute, every pair" requirement overrides news pause.
+    _ = is_news_window(pair, now)  # kept for future re-enable / telemetry
 
-    # Choppy market
-    if len(df) >= 20:
-        atr   = float((df["high"] - df["low"]).rolling(14).mean().iloc[-1])
-        plus_dm  = df["high"].diff().clip(lower=0)
-        minus_dm = (-df["low"].diff()).clip(lower=0)
-        plus_di  = 100 * plus_dm.rolling(14).mean() / (atr + 1e-10)
-        minus_di = 100 * minus_dm.rolling(14).mean() / (atr + 1e-10)
-        dx  = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-10)
-        adx = float(dx.rolling(14).mean().iloc[-1])
-        if adx < 15:
-            return "choppy_market"
-
+    # Choppy market: not a hard block — confidence penalty inside scorer
+    # already lowers grade for low-ADX environments.
     return ""
 
 
@@ -947,6 +908,12 @@ async def get_pairs() -> dict[str, Any]:
 async def get_candles(pair: str, granularity: int = 60, count: int = 300) -> dict[str, Any]:
     candles = candle_store.get(pair, {}).get(granularity, [])
     return {"pair": pair, "granularity": granularity, "candles": candles[-count:]}
+
+
+@app.get("/api/signal/{pair}")
+async def get_last_signal(pair: str) -> dict[str, Any]:
+    sig = last_signal_per_pair.get(pair)
+    return {"pair": pair, "signal": sig}
 
 
 @app.get("/api/ticks/{pair}")

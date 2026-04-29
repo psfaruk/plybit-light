@@ -1,8 +1,16 @@
-.row { display: flex; gap: 4px; align-items: center; }
+.row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  width: 100%;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
 .btn {
   font-family:   var(--font-display);
-  font-size:     10px;
-  letter-spacing:1px;
+  font-size:     11px;
+  letter-spacing:0.5px;
+  font-weight:   600;
   background:    var(--bg-elevated);
   border:        1px solid rgba(255,255,255,0.06);
   border-radius: var(--radius-sm);
@@ -10,6 +18,7 @@
   padding:       4px 10px;
   cursor:        pointer;
   transition:    all 0.15s;
+  flex-shrink:   0;
 }
 .btn:hover { border-color: var(--blue-neon); color: var(--blue-neon); }
 .btn.active {
@@ -22,20 +31,31 @@
   width: 1px; height: 18px;
   background: rgba(255,255,255,0.08);
   margin: 0 4px;
+  flex-shrink: 0;
+}
+.spacer { flex: 1; min-width: 8px; }
+
+.refreshGroup {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-left: 6px;
+  flex-shrink: 0;
 }
 
 .refresh {
-  margin-left: auto;
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 28px;
+  gap: 4px;
   height: 26px;
+  padding: 0 8px;
   background: var(--bg-elevated);
   border: 1px solid rgba(255,255,255,0.06);
   border-radius: var(--radius-sm);
   color: var(--muted);
   cursor: pointer;
+  font-size: 10px;
+  font-weight: 500;
   transition: color 0.15s, border-color 0.15s;
 }
 .refresh:hover {
@@ -45,14 +65,30 @@
 .refresh:active {
   transform: scale(0.95);
 }
-.refresh svg {
-  display: block;
+.refresh svg { display: block; flex-shrink: 0; }
+.refreshLabel {
+  letter-spacing: 0.4px;
 }
-.refresh.spinning svg {
+
+.refreshFull {
+  border-color: rgba(255, 123, 0, 0.40);
+  color: var(--orange-neon);
+}
+.refreshFull:hover {
+  border-color: var(--orange-neon);
+  color: var(--orange-neon);
+}
+
+.spinning svg {
   animation: tf-refresh-spin 0.6s linear;
 }
 
 @keyframes tf-refresh-spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
+}
+
+@media (max-width: 768px) {
+  .refreshLabel { display: none; }
+  .refresh { padding: 0 6px; }
 }
