@@ -8,30 +8,39 @@ REDIS_URL     = os.getenv("REDIS_URL",     "redis://localhost:6379")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "")
 
-# ── Pairs ────────────────────────────────────────────────────────
+# ── Pairs (user-curated, 12 total) ───────────────────────────────
+# Curated list — fewer pairs gives the AI more training cycles per pair
+# and tighter signal accuracy.
+
+# Forex majors + Gold (8) — Deriv API
 FOREX_PAIRS = [
-    # Majors
-    "frxEURUSD", "frxGBPUSD", "frxUSDJPY", "frxUSDCHF",
-    "frxUSDCAD", "frxAUDUSD", "frxNZDUSD",
-    # EUR crosses
-    "frxEURGBP", "frxEURJPY", "frxEURCAD", "frxEURAUD",
-    "frxEURCHF", "frxEURNZD",
-    # GBP crosses
-    "frxGBPJPY", "frxGBPCAD", "frxGBPAUD",
-    "frxGBPCHF", "frxGBPNZD",
-    # Other crosses
-    "frxAUDJPY", "frxAUDCAD", "frxAUDNZD",
-    "frxNZDJPY",
-    # Deriv synthetic volatility indices
-    "R_10", "R_25", "R_50", "R_75", "R_100",
-    # Gold
-    "frxXAUUSD",
+    "frxEURUSD",   # EUR/USD
+    "frxGBPUSD",   # GBP/USD
+    "frxUSDJPY",   # USD/JPY
+    "frxUSDCHF",   # USD/CHF
+    "frxUSDCAD",   # USD/CAD
+    "frxAUDUSD",   # AUD/USD
+    "frxNZDUSD",   # NZD/USD
+    "frxXAUUSD",   # XAU/USD (Gold)
 ]
+
+# US Indices + Commodities (3) — Deriv OTC symbols
+# Display labels are mapped on the frontend (OTC_NDX → USTEC, etc.)
+INDEX_PAIRS = [
+    "OTC_NDX",        # USTEC (US Tech 100 / Nasdaq)
+    "OTC_DJI",        # US30 (Wall Street 30 / Dow)
+    "OTC_OIL_WTI",    # USOIL (WTI Crude). Symbol varies by Deriv account
+                      # tier; if your token doesn't expose it, swap to
+                      # "frxBROUSD" (Brent) or remove this line.
+]
+
+# Crypto (1) — Coinbase Exchange
 CRYPTO_PAIRS = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
-    "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT", "LTCUSDT",
+    "BTCUSDT",
 ]
-ALL_PAIRS    = FOREX_PAIRS + CRYPTO_PAIRS
+
+# Combined — order matters for default-pair selection (first = default)
+ALL_PAIRS = FOREX_PAIRS + INDEX_PAIRS + CRYPTO_PAIRS
 
 # ── Candle Count ────────────────────────────────────────────────────
 CANDLE_COUNT = {

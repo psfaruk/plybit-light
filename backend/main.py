@@ -168,6 +168,16 @@ async def train_models_for_pair(pair: str) -> None:
     if len(candles) < config.MIN_CANDLES:
         return
 
+    # Tell clients training has started so the frontend stops showing "0 candles"
+    await broadcast({
+        "type":       "model_status",
+        "pair":       pair,
+        "is_trained": False,
+        "accuracy":   0.0,
+        "n_candles":  len(candles),
+        "training":   True,
+    })
+
     async with _train_sem:
         df = _candles_to_df(candles)
         now_hour = datetime.now(timezone.utc).hour
@@ -188,10 +198,12 @@ async def train_models_for_pair(pair: str) -> None:
             await asyncio.to_thread(dp.train, df, now_hour)
 
     await broadcast({
-        "type":     "model_retrained",
-        "pair":     pair,
-        "accuracy": tab.accuracy,
-        "n_candles":tab.n_candles,
+        "type":       "model_retrained",
+        "pair":       pair,
+        "is_trained": bool(tab.trained),
+        "accuracy":   tab.accuracy,
+        "n_candles":  tab.n_candles,
+        "training":   False,
     })
 
 
@@ -259,9 +271,10 @@ async def direct_deriv_listener() -> None:
                     backoff = min(backoff * 2, backoff_max)
                     continue
 
-                # Subscribe to every forex pair's tick stream
-                log.info("Deriv tick listener up — subscribing %d pairs", len(config.FOREX_PAIRS))
-                for pair in config.FOREX_PAIRS:
+                # Subscribe to forex + indices/commodities (all Deriv-served)
+                deriv_subs = list(config.FOREX_PAIRS) + list(getattr(config, "INDEX_PAIRS", []))
+                log.info("Deriv tick listener up — subscribing %d symbols", len(deriv_subs))
+                for pair in deriv_subs:
                     await ws.send(json.dumps({"ticks": pair, "subscribe": 1}))
                     await asyncio.sleep(0.02)  # rate-limit safe (Deriv allows ~50/s)
 
@@ -830,14 +843,17 @@ async def websocket_endpoint(ws: WebSocket, pair: str) -> None:
                 "candles": candles[-300:],
             })
 
-        # Send model status
+        # Send model status — fall back to candle-store count when no
+        # TabularPredictor exists yet (e.g. fresh pair still buffering history)
         tab = tabular_models.get(pair)
+        loaded_count = len(candle_store.get(pair, {}).get(60, []))
+        n_for_status = tab.n_candles if (tab and tab.trained) else loaded_count
         await ws.send_json({
             "type":       "model_status",
             "pair":       pair,
             "is_trained": bool(tab and tab.trained),
             "accuracy":   tab.accuracy if tab else 0.0,
-            "n_candles":  tab.n_candles if tab else 0,
+            "n_candles":  n_for_status,
         })
 
         while True:

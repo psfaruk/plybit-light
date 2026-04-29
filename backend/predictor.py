@@ -56,6 +56,7 @@ class TabularPredictor:
         self.granularity = granularity
         self.scaler      = StandardScaler()
         self.models: dict[str, object] = {}
+        self.model_accuracies: dict[str, float] = {}  # per-model CV mean
         self.n_candles   = 0
         self.accuracy    = 0.0
         self.trained     = False
@@ -126,15 +127,26 @@ class TabularPredictor:
                 except Exception as e:
                     log.warning("Model %s CV error: %s", name, e)
 
-        # Final fit on all data
+        # Final fit on all data + isotonic calibration
+        # (plan upgrade #1: well-calibrated probabilities → confidence is reliable)
         for name in self.MODEL_NAMES:
             try:
-                self.models[name].fit(X_scaled, y)  # type: ignore[union-attr]
+                base = self.models[name]
+                base.fit(X_scaled, y)  # type: ignore[union-attr]
+                # Wrap with isotonic calibration when we have enough rows
+                if len(X_scaled) >= 200:
+                    try:
+                        cal = CalibratedClassifierCV(base, method="isotonic", cv="prefit")  # type: ignore[arg-type]
+                        cal.fit(X_scaled, y)
+                        self.models[name] = cal
+                    except Exception as ce:
+                        log.warning("Calibration failed for %s: %s — using uncalibrated", name, ce)
                 scores = cv_scores.get(name, [0.5])
                 results[name] = float(np.mean(scores)) if scores else 0.5
             except Exception as e:
                 log.error("Model %s train error: %s", name, e)
 
+        self.model_accuracies = dict(results)
         self.n_candles  = len(df)
         self.accuracy   = float(np.mean(list(results.values()))) if results else 0.0
         self.trained    = True
@@ -174,7 +186,18 @@ class TabularPredictor:
         if not model_probs:
             return {"fused": 0.5, "direction": "SKIP", "model_probs": {}}
 
-        fused = float(np.mean(list(model_probs.values())))
+        # Plan §16 fusion: accuracy-weighted average. Each model's vote weighed
+        # by its CV accuracy minus 0.5 (skill above coin-flip), clamped at 0.05
+        # so even a barely-skilled model contributes a tiny bit.
+        weights: list[float] = []
+        probs:   list[float] = []
+        for name, p in model_probs.items():
+            acc = float(self.model_accuracies.get(name, 0.55))
+            w   = max(0.05, acc - 0.5)
+            weights.append(w)
+            probs.append(p)
+        total_w = sum(weights) or 1.0
+        fused   = float(sum(p * w for p, w in zip(probs, weights)) / total_w)
         direction = "GREEN" if fused > 0.5 else "RED"
 
         return {
@@ -196,6 +219,7 @@ class TabularPredictor:
                 "scaler":  self.scaler,
                 "n":       self.n_candles,
                 "acc":     self.accuracy,
+                "accs":    self.model_accuracies,
             }, self._path())
         except Exception as e:
             log.error("Save error: %s", e)
@@ -205,12 +229,13 @@ class TabularPredictor:
         if not os.path.exists(p):
             return
         try:
-            data          = joblib.load(p)
-            self.models   = data["models"]
-            self.scaler   = data["scaler"]
-            self.n_candles= data["n"]
-            self.accuracy = data["acc"]
-            self.trained  = True
+            data                  = joblib.load(p)
+            self.models           = data["models"]
+            self.scaler           = data["scaler"]
+            self.n_candles        = data["n"]
+            self.accuracy         = data["acc"]
+            self.model_accuracies = data.get("accs", {})
+            self.trained          = True
         except Exception as e:
             log.warning("Load error for %s: %s", self.pair, e)
 
