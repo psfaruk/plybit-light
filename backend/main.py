@@ -81,11 +81,9 @@ last_signal_per_pair: dict[str, dict[str, Any]] = {}
 # tick builders: pair → current 1M candle being assembled from raw ticks
 _tick_builders:  dict[str, dict]             = {}
 
-# throttle live tick broadcasts (closed candles always pass through).
-# 200 ms balances smoothness with WS overhead. Aggregated higher TFs use
-# 600 ms because they update less often and broadcast across all clients.
+# throttle live tick broadcasts — 250 ms balances smoothness vs WS overhead
 _last_live_broadcast: dict[str, float]       = {}
-_LIVE_BROADCAST_INTERVAL = 0.2   # 200 ms for 1M live wick
+_LIVE_BROADCAST_INTERVAL = 0.25
 
 # active WebSocket clients
 ws_clients: set[WebSocket] = set()
@@ -551,8 +549,17 @@ async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
     utc_hour   = datetime.now(timezone.utc).hour
     utc_minute = datetime.now(timezone.utc).minute
 
-    # Run full analysis — pipeline always emits, never SKIPs
+    # Run full analysis — strict pipeline per Master Plan §18
     signal = await _run_signal_pipeline(pair, df_1m, candle_dfs, utc_hour, utc_minute)
+
+    # Plan §8: SKIP < 0.65 → no signal emitted
+    if signal["grade"] == "SKIP":
+        await broadcast({
+            "type":   "signal_blocked",
+            "pair":   pair,
+            "reason": signal.get("reason", "below_threshold"),
+        })
+        return
 
     epoch  = int(closed_candle.get("epoch", time.time()))
     ws_sel = window_selectors.get(pair)
@@ -561,12 +568,17 @@ async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
     react  = signal.get("candle_reaction", {})
     net    = float(react.get("net_score", 0)) if isinstance(react, dict) else 0.0
 
-    # Window selector keeps top-N best signals per 5M block (advisory)
-    if ws_sel:
-        ws_sel.try_add(
-            epoch, float(signal["confidence"]), str(signal["signal"]),
-            str(signal["grade"]), mtf_ag, net,
-        )
+    # Plan §17: 5M window holds at most 3 best signals; minute_idx ≥ 1 only.
+    if ws_sel and not ws_sel.try_add(
+        epoch, float(signal["confidence"]), str(signal["signal"]),
+        str(signal["grade"]), mtf_ag, net,
+    ):
+        await broadcast({
+            "type":   "signal_blocked",
+            "pair":   pair,
+            "reason": "window_full",
+        })
+        return
 
     signal["window_plan"]       = ws_sel.get_window_plan() if ws_sel else []
     signal["candle_open_time"]  = epoch
@@ -582,7 +594,7 @@ async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
     if tab and tab.should_retrain(1):
         asyncio.create_task(train_models_for_pair(pair))
 
-    # Telegram alert (filtered to HIGH+ inside)
+    # Telegram alert — plan §21 filters to HIGH+ inside
     asyncio.create_task(send_signal_alert(signal, pair))
 
 
@@ -617,10 +629,10 @@ async def _run_signal_pipeline(
     # ── Harmonic Patterns ────────────────────────────────────
     harmonics = detect_harmonics(df_1m)
 
-    # ── MTF Analysis (advisory; never blocks emission) ───────
+    # ── MTF Analysis (plan §9: < 60% agreement → block) ────
     mtf = compute_mtf_agreement(candle_dfs, utc_hour)
-    mtf_dir_str = str(mtf.get("direction", "neutral"))
-    mtf_agreement = float(mtf.get("agreement", 0.0))
+    if float(mtf.get("agreement", 0)) < config.MTF_MIN_AGREEMENT:
+        return _skip_signal("mtf_conflict")
 
     # ── AI Models ────────────────────────────────────────────
     tab = tabular_models.get(pair)
@@ -632,16 +644,14 @@ async def _run_signal_pipeline(
     deep_probs = dp.predict(df_1m, utc_hour) if dp else {}
     bayes = dp.predict_bayesian(df_1m, utc_hour) if dp else {"bayes_mean": 0.5, "bayes_std": 0.1}
 
-    # Rule engine — always runs even when AI not yet trained
     rule_result = rule_engine_predict(df_1m, smc, inst, reaction, utc_hour)
     rule_dir    = str(rule_result.get("direction", "SKIP"))
     rule_conf   = float(rule_result.get("confidence", 0.5))
 
-    # Combine all model probs
     all_model_probs: dict[str, float] = {}
     all_model_probs.update(tab_probs)  # type: ignore[arg-type]
     all_model_probs.update(deep_probs)
-    all_model_probs["rule"] = rule_conf if rule_dir != "SKIP" else 0.5
+    all_model_probs["rule"]  = rule_conf if rule_dir != "SKIP" else 0.5
     all_model_probs["bayes"] = float(bayes.get("bayes_mean", 0.5))
 
     if all_model_probs:
@@ -649,25 +659,17 @@ async def _run_signal_pipeline(
     else:
         base_fused = 0.5
 
-    # Stacking override
     stack_model = stacking_models.get(pair)
     if stack_model and stack_model.trained:
         stack_prob = stack_model.predict(list(all_model_probs.values()))
         base_fused = stack_model.fuse(base_fused, stack_prob)
 
-    # Direction is ALWAYS picked. When AI hasn't decided, fall back to rule
-    # engine, then to the last-candle close direction so the user always sees
-    # a GREEN/RED arrow per the user's "signal every minute" requirement.
-    if tab_dir != "SKIP":
-        direction = "GREEN" if base_fused > 0.5 else "RED"
-    elif rule_dir != "SKIP":
-        direction = rule_dir
-    elif len(df_1m) >= 2:
-        last_close = float(df_1m["close"].iloc[-1])
-        prev_close = float(df_1m["close"].iloc[-2])
-        direction  = "GREEN" if last_close >= prev_close else "RED"
-    else:
-        direction = "GREEN" if base_fused >= 0.5 else "RED"
+    # Direction
+    direction = "GREEN" if base_fused > 0.5 else "RED"
+    if tab_dir == "SKIP" and rule_dir == "SKIP":
+        direction = "SKIP"
+    if direction == "SKIP":
+        return _skip_signal("no_consensus")
 
     # ── Kalman ───────────────────────────────────────────────
     kf = kalman_filters.get(pair)
@@ -676,16 +678,18 @@ async def _run_signal_pipeline(
     kv = float(kalman_trend_d.get("kalman_velocity", 0))
     kalman_agree = (kt == 1 and direction == "GREEN") or (kt == -1 and direction == "RED")
 
-    # ── PPO advisory (lowers confidence, doesn't skip) ───────
+    # ── PPO safety gate (plan §16: SKIP → force skip) ────────
     ppo = ppo_agents.get(pair)
-    ppo_skip = False
     if ppo:
         ppo_dir = ppo.decide(feat, base_fused, direction)
-        ppo_skip = ppo_dir == "SKIP"
+        if ppo_dir == "SKIP":
+            return _skip_signal("ppo_skip")
 
-    # ── Meta-labeling ────────────────────────────────────────
+    # ── Meta-labeling (plan: < 0.60 → BLOCK) ────────────────
     meta = meta_labelers.get(pair)
     meta_prob = meta.predict(feat) if meta else 0.75
+    if meta_prob < 0.60:
+        return _skip_signal("meta_label_block")
 
     # ── 4-Layer Scoring ──────────────────────────────────────
     mtf_pts    = mtf_score_pts(mtf)
@@ -698,60 +702,41 @@ async def _run_signal_pipeline(
         meta_prob >= 0.60, adx, kalman_agree, kv,
     )
 
-    # Harmonic boost
     h_boost = harmonic_confidence_boost(harmonics, direction)
     confidence = min(confidence + h_boost, 0.99)
 
-    # ── Detect direction-aligned patterns ───────────────────
+    # Direction-aligned patterns (plan: pattern check #7 in 8-check consensus)
     pattern_names: list[str] = []
     if direction == "GREEN":
-        if reaction.get("pin_bull"):
-            pattern_names.append("pin_bar_bull")
-        if reaction.get("bull_engulf"):
-            pattern_names.append("bullish_engulfing")
+        if reaction.get("pin_bull"):    pattern_names.append("pin_bar_bull")
+        if reaction.get("bull_engulf"): pattern_names.append("bullish_engulfing")
     else:
-        if reaction.get("pin_bear"):
-            pattern_names.append("pin_bar_bear")
-        if reaction.get("bear_engulf"):
-            pattern_names.append("bearish_engulfing")
+        if reaction.get("pin_bear"):    pattern_names.append("pin_bar_bear")
+        if reaction.get("bear_engulf"): pattern_names.append("bearish_engulfing")
     for h_name, h_val in harmonics.items():
         if not h_val:
             continue
-        is_bull_harm = h_name.endswith("_bull")
-        is_bear_harm = h_name.endswith("_bear")
-        if direction == "GREEN" and is_bull_harm:
+        if direction == "GREEN" and h_name.endswith("_bull"):
             pattern_names.append(h_name)
-        elif direction == "RED" and is_bear_harm:
+        elif direction == "RED" and h_name.endswith("_bear"):
             pattern_names.append(h_name)
     pattern_present = len(pattern_names) > 0
 
-    # Consensus filter — penalty/boost only, never blocks
+    # 8-check consensus filter
     cons_score = consensus_check(feat, direction, pattern_present)
     confidence = apply_consensus_penalty(confidence, cons_score)
 
-    # Soft penalties for misaligned context (no skip — user wants every-minute signals)
-    if mtf_dir_str != "neutral" and (
-        (direction == "GREEN" and mtf_dir_str == "bear") or
-        (direction == "RED"   and mtf_dir_str == "bull")
-    ):
-        confidence *= 0.80
-
-    if mtf_agreement < config.MTF_MIN_AGREEMENT:
-        confidence *= 0.90
-
-    if ppo_skip:
-        confidence *= 0.85
-
-    if meta_prob < 0.50:
-        confidence *= 0.85
-
-    if loss_streak.get(pair, 0) >= 5:
-        confidence *= 0.80  # circuit-breaker softened
-
-    confidence = max(0.0, min(confidence, 0.99))
-
-    # Grade — every signal gets one (WEAK floor for low confidence)
     grade_str = grade(confidence)
+    if grade_str == "SKIP":
+        return _skip_signal("low_score")
+
+    # Plan: minimum 6/8 consensus checks must pass to emit
+    if cons_score < config.SIGNAL_MIN_EMIT_CONFIRM:
+        return _skip_signal("low_score")
+
+    # Plan §18: 5 consecutive losses → 30 min pause
+    if loss_streak.get(pair, 0) >= 5:
+        return _skip_signal("circuit_break")
 
     return {
         "signal":           direction,
@@ -793,12 +778,30 @@ def _check_signal_gates(pair: str, df: pd.DataFrame) -> str:
         if dow in (5, 6):
             return "market_closed"
 
-    # News window — soft warning only (signal still emits but flagged)
-    # The user's "every minute, every pair" requirement overrides news pause.
-    _ = is_news_window(pair, now)  # kept for future re-enable / telemetry
+    # News window ±15 min — plan §18: high-impact event blocks
+    if is_news_window(pair, now):
+        return "news_window"
 
-    # Choppy market: not a hard block — confidence penalty inside scorer
-    # already lowers grade for low-ADX environments.
+    # Choppy market: ADX < 15 (plan §18 sideways gate)
+    if len(df) >= 20:
+        atr_series = (df["high"] - df["low"]).rolling(14).mean()
+        atr        = float(atr_series.iloc[-1])
+        plus_dm    = df["high"].diff().clip(lower=0)
+        minus_dm   = (-df["low"].diff()).clip(lower=0)
+        plus_di    = 100 * plus_dm.rolling(14).mean()  / (atr + 1e-10)
+        minus_di   = 100 * minus_dm.rolling(14).mean() / (atr + 1e-10)
+        dx         = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-10)
+        adx        = float(dx.rolling(14).mean().iloc[-1])
+        if adx < 15:
+            return "choppy_market"
+
+        # ATR-spike gate (plan §18 volatility): current candle range > 3× rolling ATR
+        if len(df) >= 21:
+            current_range = float(df["high"].iloc[-1] - df["low"].iloc[-1])
+            avg_atr_prev  = float(atr_series.iloc[-2])  # exclude current candle
+            if avg_atr_prev > 0 and current_range > 3 * avg_atr_prev:
+                return "volatility"
+
     return ""
 
 

@@ -73,7 +73,7 @@ MIN_WINDOW_POSITION    = 1
 # ── MTF Analysis ─────────────────────────────────────────────────────
 MTF_ANALYSIS_TFS  = [3600, 900, 300, 120]
 MTF_SIGNAL_TF     = 60
-MTF_MIN_AGREEMENT = 0.45
+MTF_MIN_AGREEMENT = 0.60   # plan §9: < 60% → block
 MTF_WEIGHTS       = {"1h": 0.35, "15m": 0.28, "5m": 0.22, "2m": 0.15}
 
 # ── App Timeframes ────────────────────────────────────────────────────
@@ -81,9 +81,9 @@ APP_TF_PRIMARY   = [60, 300, 900]
 APP_TF_SECONDARY = [120, 3600, 14400]
 
 # ── Signal Quality ─────────────────────────────────────────────────────
-GRADE_ELITE    = 0.82
-GRADE_HIGH     = 0.72
-GRADE_MODERATE = 0.55
+GRADE_ELITE    = 0.82  # 👑
+GRADE_HIGH     = 0.75  # ✅
+GRADE_MODERATE = 0.65  # ⚡  (plan: < 0.65 → SKIP, no signal)
 SIGNAL_THRESHOLD        = 0.75
 SIGNAL_CONFIRM_REQUIRED = 8
 SIGNAL_MIN_EMIT_CONFIRM = 6
