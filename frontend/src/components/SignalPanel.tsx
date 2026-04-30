@@ -61,15 +61,20 @@ function CountdownTimer({ expiryBars }: { expiryBars: number }) {
 }
 
 const BLOCK_REASON_LABEL: Record<string, string> = {
+  loading_history:   "Loading history (need 150+ candles)",
   market_closed:     "Market closed (forex)",
   news_window:       "High-impact news window",
   choppy_market:     "Choppy market (ADX low)",
+  volatility:        "Volatility spike",
   mtf_conflict:      "Multi-timeframe conflict",
   no_consensus:      "AI models disagree",
   ppo_skip:          "RL safety gate",
   meta_label_block:  "Meta-label rejected",
   below_threshold:   "Confidence below threshold",
+  low_score:         "Confidence below threshold",
+  circuit_break:     "Circuit breaker (loss streak)",
   circuit_breaker:   "Circuit breaker (loss streak)",
+  window_full:       "5M window already has 3 signals",
 };
 
 export function SignalPanel() {

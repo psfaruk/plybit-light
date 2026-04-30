@@ -540,9 +540,16 @@ async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
     df_1m      = _candles_to_df(candles_1m)
 
     if len(df_1m) < config.MIN_CANDLES:
+        # Tell the frontend why nothing is happening — otherwise the panel
+        # gets stuck on whatever was last broadcast.
+        await broadcast({
+            "type":   "signal_blocked",
+            "pair":   pair,
+            "reason": "loading_history",
+        })
         return
 
-    # Signal gate checks
+    # Signal gate checks (hard blocks only)
     gate = _check_signal_gates(pair, df_1m)
     if gate:
         await broadcast({
