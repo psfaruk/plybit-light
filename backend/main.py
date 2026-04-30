@@ -642,10 +642,10 @@ async def _run_signal_pipeline(
     # ── Harmonic Patterns ────────────────────────────────────
     harmonics = detect_harmonics(df_1m)
 
-    # ── MTF Analysis (plan §9: < 60% agreement → block) ────
+    # ── MTF Analysis (advisory; soft penalty later) ─────────
     mtf = compute_mtf_agreement(candle_dfs, utc_hour)
-    if float(mtf.get("agreement", 0)) < config.MTF_MIN_AGREEMENT:
-        return _skip_signal("mtf_conflict")
+    mtf_agreement = float(mtf.get("agreement", 0))
+    mtf_dir_str   = str(mtf.get("direction", "neutral"))
 
     # ── AI Models ────────────────────────────────────────────
     tab = tabular_models.get(pair)
@@ -677,12 +677,18 @@ async def _run_signal_pipeline(
         stack_prob = stack_model.predict(list(all_model_probs.values()))
         base_fused = stack_model.fuse(base_fused, stack_prob)
 
-    # Direction
-    direction = "GREEN" if base_fused > 0.5 else "RED"
-    if tab_dir == "SKIP" and rule_dir == "SKIP":
-        direction = "SKIP"
-    if direction == "SKIP":
-        return _skip_signal("no_consensus")
+    # ── Direction (always resolved; never SKIP at this stage) ─
+    # Fallback chain: AI fused → rule engine → last-bar close diff
+    if tab_dir != "SKIP":
+        direction = "GREEN" if base_fused > 0.5 else "RED"
+    elif rule_dir != "SKIP":
+        direction = rule_dir
+    elif len(df_1m) >= 2:
+        last_close = float(df_1m["close"].iloc[-1])
+        prev_close = float(df_1m["close"].iloc[-2])
+        direction  = "GREEN" if last_close >= prev_close else "RED"
+    else:
+        direction = "GREEN" if base_fused >= 0.5 else "RED"
 
     # ── Kalman ───────────────────────────────────────────────
     kf = kalman_filters.get(pair)
@@ -691,18 +697,15 @@ async def _run_signal_pipeline(
     kv = float(kalman_trend_d.get("kalman_velocity", 0))
     kalman_agree = (kt == 1 and direction == "GREEN") or (kt == -1 and direction == "RED")
 
-    # ── PPO safety gate (plan §16: SKIP → force skip) ────────
+    # ── PPO advisory (soft penalty, no skip) ────────────────
     ppo = ppo_agents.get(pair)
+    ppo_skip = False
     if ppo:
-        ppo_dir = ppo.decide(feat, base_fused, direction)
-        if ppo_dir == "SKIP":
-            return _skip_signal("ppo_skip")
+        ppo_skip = ppo.decide(feat, base_fused, direction) == "SKIP"
 
-    # ── Meta-labeling (plan: < 0.60 → BLOCK) ────────────────
+    # ── Meta-labeling (soft penalty when low) ───────────────
     meta = meta_labelers.get(pair)
     meta_prob = meta.predict(feat) if meta else 0.75
-    if meta_prob < 0.60:
-        return _skip_signal("meta_label_block")
 
     # ── 4-Layer Scoring ──────────────────────────────────────
     mtf_pts    = mtf_score_pts(mtf)
@@ -715,10 +718,16 @@ async def _run_signal_pipeline(
         meta_prob >= 0.60, adx, kalman_agree, kv,
     )
 
+    # AI-aligned blend: a strongly-confident AI vote should not be killed by
+    # weak SMC/reaction context. Take the better of layer-score or direction-
+    # aligned AI confidence (with a small handicap so scoring still matters).
+    ai_aligned = base_fused if direction == "GREEN" else (1.0 - base_fused)
+    confidence = max(confidence, ai_aligned - 0.10)
+
     h_boost = harmonic_confidence_boost(harmonics, direction)
     confidence = min(confidence + h_boost, 0.99)
 
-    # Direction-aligned patterns (plan: pattern check #7 in 8-check consensus)
+    # Direction-aligned patterns
     pattern_names: list[str] = []
     if direction == "GREEN":
         if reaction.get("pin_bull"):    pattern_names.append("pin_bar_bull")
@@ -735,19 +744,45 @@ async def _run_signal_pipeline(
             pattern_names.append(h_name)
     pattern_present = len(pattern_names) > 0
 
-    # 8-check consensus filter
+    # 8-check consensus filter (penalty/boost; never blocks)
     cons_score = consensus_check(feat, direction, pattern_present)
     confidence = apply_consensus_penalty(confidence, cons_score)
+
+    # ── Soft penalties for conflicting context ──────────────
+    # MTF direction opposes signal direction — strongest penalty
+    if mtf_dir_str != "neutral":
+        if (direction == "GREEN" and mtf_dir_str == "bear") or \
+           (direction == "RED"   and mtf_dir_str == "bull"):
+            confidence *= 0.85
+    if mtf_agreement < config.MTF_MIN_AGREEMENT:
+        confidence *= 0.92
+    if ppo_skip:
+        confidence *= 0.85
+    if meta_prob < 0.60:
+        confidence *= 0.88
+    if cons_score < config.SIGNAL_MIN_EMIT_CONFIRM:
+        confidence *= 0.92
+    if adx < 15:
+        confidence *= 0.85  # choppy market
+
+    # ATR-spike (volatility): current candle range > 3× rolling ATR
+    if len(df_1m) >= 21:
+        try:
+            atr_series_p   = (df_1m["high"] - df_1m["low"]).rolling(14).mean()
+            current_range  = float(df_1m["high"].iloc[-1] - df_1m["low"].iloc[-1])
+            prev_avg_range = float(atr_series_p.iloc[-2])
+            if prev_avg_range > 0 and current_range > 3 * prev_avg_range:
+                confidence *= 0.85
+        except Exception:
+            pass
+
+    confidence = max(0.0, min(confidence, 0.99))
 
     grade_str = grade(confidence)
     if grade_str == "SKIP":
         return _skip_signal("low_score")
 
-    # Plan: minimum 6/8 consensus checks must pass to emit
-    if cons_score < config.SIGNAL_MIN_EMIT_CONFIRM:
-        return _skip_signal("low_score")
-
-    # Plan §18: 5 consecutive losses → 30 min pause
+    # Plan §18: 5 consecutive losses → 30 min pause (kept as hard block)
     if loss_streak.get(pair, 0) >= 5:
         return _skip_signal("circuit_break")
 
@@ -791,29 +826,14 @@ def _check_signal_gates(pair: str, df: pd.DataFrame) -> str:
         if dow in (5, 6):
             return "market_closed"
 
-    # News window ±15 min — plan §18: high-impact event blocks
+    # News window ±15 min — kept as a hard block (high-impact whipsaw risk).
     if is_news_window(pair, now):
         return "news_window"
 
-    # Choppy market: ADX < 15 (plan §18 sideways gate)
-    if len(df) >= 20:
-        atr_series = (df["high"] - df["low"]).rolling(14).mean()
-        atr        = float(atr_series.iloc[-1])
-        plus_dm    = df["high"].diff().clip(lower=0)
-        minus_dm   = (-df["low"].diff()).clip(lower=0)
-        plus_di    = 100 * plus_dm.rolling(14).mean()  / (atr + 1e-10)
-        minus_di   = 100 * minus_dm.rolling(14).mean() / (atr + 1e-10)
-        dx         = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-10)
-        adx        = float(dx.rolling(14).mean().iloc[-1])
-        if adx < 15:
-            return "choppy_market"
-
-        # ATR-spike gate (plan §18 volatility): current candle range > 3× rolling ATR
-        if len(df) >= 21:
-            current_range = float(df["high"].iloc[-1] - df["low"].iloc[-1])
-            avg_atr_prev  = float(atr_series.iloc[-2])  # exclude current candle
-            if avg_atr_prev > 0 and current_range > 3 * avg_atr_prev:
-                return "volatility"
+    # Note: choppy_market (ADX < 15) and ATR-spike are now SOFT penalties
+    # applied inside _run_signal_pipeline — they reduce confidence rather
+    # than block emission outright. This gives the user more frequent signals
+    # while still letting the grade system filter low-quality setups.
 
     return ""
 
