@@ -135,21 +135,27 @@ async def initial_history_loader() -> None:
 
 
 async def load_history_for_pair(pair: str) -> None:
-    for granularity in list(config.CANDLE_COUNT.keys()):
+    for granularity, target in config.CHART_CANDLE_COUNT.items():
         try:
             async with _history_sem:
-                candles = await deriv_client.fetch_history(pair, granularity)
+                # Use paginated fetch to collect full chart history
+                candles = await deriv_client.fetch_history_paginated(
+                    pair, granularity, total_count=target
+                )
 
             if candles:
                 candle_store[pair][granularity] = candles
-                log.info("Loaded %d × %ds candles for %s", len(candles), granularity, pair)
+                log.info(
+                    "Loaded %d × %ds candles for %s (target %d)",
+                    len(candles), granularity, pair, target,
+                )
 
-                # Push 1M history to already-connected clients immediately
+                # Push 1M history to already-connected clients
                 if granularity == 60:
                     await broadcast({
                         "type":    "history",
                         "pair":    pair,
-                        "candles": candles[-300:],
+                        "candles": candles,   # send ALL loaded candles
                     })
                     if len(candles) >= config.MIN_CANDLES:
                         asyncio.create_task(train_models_for_pair(pair))
@@ -453,7 +459,20 @@ async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
     log.debug("1M close: %s @ %s", pair, closed_candle.get("epoch"))
 
     candles_1m = candle_store[pair].get(60, [])
-    df_1m      = _candles_to_df(candles_1m)
+
+    # Guard: need minimum candles before pipeline runs
+    if len(candles_1m) < config.MIN_CANDLES:
+        await broadcast({
+            "type":   "signal_blocked",
+            "pair":   pair,
+            "reason": "loading_history",
+        })
+        return
+
+    # Use only recent candles for analysis (fast computation, focused context)
+    # Training uses all candles; pipeline only needs the last N
+    analysis_n = config.ANALYSIS_CANDLE_COUNT.get(60, 500)
+    df_1m      = _candles_to_df(candles_1m[-analysis_n:])
 
     if len(df_1m) < config.MIN_CANDLES:
         # Tell the frontend why nothing is happening — otherwise the panel
@@ -475,12 +494,13 @@ async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
         })
         return
 
-    # Build MTF candle dict
+    # Build MTF candle dict — use analysis slice per TF
     candle_dfs: dict[int, pd.DataFrame] = {}
     for gran in config.MTF_ANALYSIS_TFS:
         c = candle_store[pair].get(gran, [])
         if c:
-            candle_dfs[gran] = _candles_to_df(c)
+            n = config.ANALYSIS_CANDLE_COUNT.get(gran, 200)
+            candle_dfs[gran] = _candles_to_df(c[-n:])
 
     utc_hour   = datetime.now(timezone.utc).hour
     utc_minute = datetime.now(timezone.utc).minute
@@ -801,7 +821,7 @@ async def websocket_endpoint(ws: WebSocket, pair: str) -> None:
             await ws.send_json({
                 "type":    "history",
                 "pair":    pair,
-                "candles": candles[-300:],
+                "candles": candles,   # send all stored candles on connect
             })
 
         # Send model status — fall back to candle-store count when no

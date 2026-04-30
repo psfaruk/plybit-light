@@ -23,16 +23,34 @@ FOREX_PAIRS = [
 # No index or crypto pairs — keeps training cycles focused per pair
 ALL_PAIRS = list(FOREX_PAIRS)
 
-# ── Candle Count ────────────────────────────────────────────────────
-CANDLE_COUNT = {
-    60:    1000,
-    120:   500,
-    300:   500,
-    900:   300,
-    3600:  300,
-    14400: 200,
+# ── Candle Counts ───────────────────────────────────────────────────
+
+# How many candles to DISPLAY on the chart (fetched via paginated Deriv API)
+CHART_CANDLE_COUNT = {
+    60:    15000,   # 1M  → ~10 days  (3 paginated batches of 5000)
+    120:   10000,   # 2M  → ~14 days
+    300:   10000,   # 5M  → ~35 days
+    900:   8000,    # 15M → ~83 days
+    3600:  5000,    # 1H  → ~208 days
+    14400: 3000,    # 4H  → ~500 days
 }
-HISTORY_COUNT = 10000
+
+# How many candles the SIGNAL PIPELINE uses for fast analysis
+# (takes the most recent N from whatever is stored — keeps compute fast)
+ANALYSIS_CANDLE_COUNT = {
+    60:    500,
+    120:   300,
+    300:   300,
+    900:   200,
+    3600:  200,
+    14400: 150,
+}
+
+# Legacy alias — used by old fetch_history() calls
+CANDLE_COUNT = CHART_CANDLE_COUNT
+
+# In-memory ring buffer per pair/granularity
+HISTORY_COUNT = 20000
 
 # ── AI Training ──────────────────────────────────────────────────
 MIN_CANDLES   = 150

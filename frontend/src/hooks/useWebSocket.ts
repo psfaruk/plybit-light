@@ -20,7 +20,8 @@ export function useWebSocket() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`${API_BASE}/api/candles/${activePair}?granularity=${activeTf}&count=5000`);
+        // count=0 → return all stored candles (full lifetime chart history)
+        const r = await fetch(`${API_BASE}/api/candles/${activePair}?granularity=${activeTf}&count=0`);
         if (!r.ok) return;
         const data = await r.json() as { candles?: Array<{ epoch: number; open: number; high: number; low: number; close: number }> };
         if (cancelled) return;
