@@ -55,39 +55,97 @@ def smc_score_pts(
     harmonics: dict[str, int],
     sd: dict[str, float],
     elliott: dict[str, float],
+    direction: str = "GREEN",
 ) -> float:
-    """SMC/ICT context layer (max ~30 pts, bonuses allowed)."""
+    """SMC/ICT context layer (max ~30 pts, bonuses allowed). Direction-aware."""
     pts = 0.0
+    bull = direction == "GREEN"
 
-    if smc.get("price_at_bullish_ob") or smc.get("price_at_bearish_ob"):
+    # Order Blocks — aligned gives pts, opposing penalises
+    if bull and smc.get("price_at_bullish_ob"):
         pts += 10
-    if smc.get("price_in_bullish_fvg") or smc.get("price_in_bearish_fvg"):
+    elif not bull and smc.get("price_at_bearish_ob"):
+        pts += 10
+    elif bull and smc.get("price_at_bearish_ob"):
+        pts -= 5
+    elif not bull and smc.get("price_at_bullish_ob"):
+        pts -= 5
+
+    # FVG
+    if bull and smc.get("price_in_bullish_fvg"):
         pts += 8
-    if smc.get("bullish_bos") or smc.get("bearish_bos"):
+    elif not bull and smc.get("price_in_bearish_fvg"):
+        pts += 8
+    elif bull and smc.get("price_in_bearish_fvg"):
+        pts -= 3
+    elif not bull and smc.get("price_in_bullish_fvg"):
+        pts -= 3
+
+    # BOS
+    if bull and smc.get("bullish_bos"):
         pts += 7
-    if smc.get("in_ote_zone"):
+    elif not bull and smc.get("bearish_bos"):
+        pts += 7
+    elif bull and smc.get("bearish_bos"):
+        pts -= 4
+    elif not bull and smc.get("bullish_bos"):
+        pts -= 4
+
+    # OTE zone — direction-aware fields take priority
+    if bull and smc.get("in_ote_zone_bull"):
         pts += 5
-    if smc.get("sell_side_liquidity") or smc.get("buy_side_liquidity"):
+    elif not bull and smc.get("in_ote_zone_bear"):
+        pts += 5
+    elif smc.get("in_ote_zone"):
+        pts += 3  # legacy fallback
+
+    # Liquidity
+    if bull and smc.get("sell_side_liquidity"):
+        pts += 5
+    elif not bull and smc.get("buy_side_liquidity"):
         pts += 5
     if smc.get("liquidity_swept"):
         pts += 8
-    if inst.get("judas_swing_bull") or inst.get("judas_swing_bear"):
+
+    # Institutional
+    if bull and (inst.get("judas_swing_bull") or inst.get("mm_bull_cycle")):
         pts += 6
-    if inst.get("mm_bull_cycle") or inst.get("mm_bear_cycle"):
+    elif not bull and (inst.get("judas_swing_bear") or inst.get("mm_bear_cycle")):
+        pts += 6
+    if bull and (inst.get("bullish_liquidity_sweep") or inst.get("displacement_bull")):
         pts += 5
-    if wyckoff.get("wyckoff_spring") or wyckoff.get("wyckoff_upthrust"):
+    elif not bull and (inst.get("bearish_liquidity_sweep") or inst.get("displacement_bear")):
+        pts += 5
+
+    # Wyckoff
+    if bull and wyckoff.get("wyckoff_spring"):
         pts += 8
-    if wyckoff.get("wyckoff_sos") or wyckoff.get("wyckoff_sow"):
-        pts += 6
-    if inst.get("bullish_liquidity_sweep") or inst.get("bearish_liquidity_sweep"):
-        pts += 5  # VSA stopping volume proxy
-    if inst.get("displacement_bull") or inst.get("displacement_bear"):
-        pts += 4
-    if any(v for v in harmonics.values()):
+    elif not bull and wyckoff.get("wyckoff_upthrust"):
         pts += 8
-    if sd.get("sd_zone_fresh") and (sd.get("sd_at_demand") or sd.get("sd_at_supply")):
+    if bull and wyckoff.get("wyckoff_sos"):
         pts += 6
-    if elliott.get("elliott_impulse_bull") or elliott.get("elliott_impulse_bear"):
+    elif not bull and wyckoff.get("wyckoff_sow"):
+        pts += 6
+
+    # Harmonics — direction aware
+    bull_harm = {"gartley_bull", "bat_bull", "butterfly_bull", "crab_bull"}
+    bear_harm = {"gartley_bear", "bat_bear", "butterfly_bear", "crab_bear"}
+    if bull and any(harmonics.get(p, 0) for p in bull_harm):
+        pts += 8
+    elif not bull and any(harmonics.get(p, 0) for p in bear_harm):
+        pts += 8
+
+    # S/D zones
+    if sd.get("sd_zone_fresh"):
+        if bull and sd.get("sd_at_demand"):
+            pts += 6
+        elif not bull and sd.get("sd_at_supply"):
+            pts += 6
+
+    # Elliott waves
+    if bull and elliott.get("elliott_impulse_bull"):
+        pts += 7
+    elif not bull and elliott.get("elliott_impulse_bear"):
         pts += 7
 
     return pts

@@ -20,7 +20,7 @@ export function useWebSocket() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`${API_BASE}/api/candles/${activePair}?granularity=${activeTf}&count=300`);
+        const r = await fetch(`${API_BASE}/api/candles/${activePair}?granularity=${activeTf}&count=5000`);
         if (!r.ok) return;
         const data = await r.json() as { candles?: Array<{ epoch: number; open: number; high: number; low: number; close: number }> };
         if (cancelled) return;
@@ -93,9 +93,10 @@ export function useWebSocket() {
           // Use the most-recent candle epoch for this pair to anchor the arrow
           // (we only have access to active-pair candles here; backend includes
           //  candle_open_time in the payload for cross-pair anchoring).
-          const epoch = (msg.candle_open_time as number | undefined) ??
-                        (msg.epoch as number | undefined) ??
-                        Math.floor(Date.now() / 1000 / 60) * 60;
+          // Bug 9.1/9.2 fix: arrow belongs on the NEXT candle (trade candle N+1)
+          const openTime = (msg.candle_open_time as number | undefined) ?? 0;
+          const closeTime = (msg.candle_close_time as number | undefined) ?? 0;
+          const epoch = closeTime || (openTime ? openTime + 60 : Math.floor(Date.now() / 1000 / 60) * 60);
           addMarker({
             pair:       sig.pair ?? msgPair,
             tf:         60,

@@ -30,8 +30,10 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 
 
 def _label(df: pd.DataFrame, lookahead: int = 1) -> pd.Series:
-    """1 = next candle closes higher (GREEN), 0 = RED."""
-    return (df["close"].shift(-lookahead) > df["close"]).astype(int)
+    """1 = next candle body is GREEN (close > open), 0 = RED body."""
+    next_close = df["close"].shift(-lookahead)
+    next_open  = df["open"].shift(-lookahead)
+    return (next_close > next_open).astype(int)
 
 
 def _prep_xy(df: pd.DataFrame, utc_hour: int = 0) -> tuple[np.ndarray, np.ndarray]:
@@ -73,8 +75,6 @@ class TabularPredictor:
         if len(X) < MIN_CANDLES:
             return {}
 
-        X_scaled = self.scaler.fit_transform(X)
-
         results: dict[str, float] = {}
 
         # 1. XGBoost
@@ -110,11 +110,14 @@ class TabularPredictor:
             l2_regularization=1.0, random_state=42,
         )
 
+        # CV with per-fold scaler to prevent data leakage
         tscv = TimeSeriesSplit(n_splits=5)
         cv_scores: dict[str, list[float]] = {k: [] for k in self.MODEL_NAMES}
 
-        for train_idx, val_idx in tscv.split(X_scaled):
-            Xtr, Xv = X_scaled[train_idx], X_scaled[val_idx]
+        for train_idx, val_idx in tscv.split(X):
+            fold_scaler = StandardScaler()
+            Xtr = fold_scaler.fit_transform(X[train_idx])
+            Xv  = fold_scaler.transform(X[val_idx])
             ytr, yv = y[train_idx], y[val_idx]
             for name in self.MODEL_NAMES:
                 try:
@@ -127,17 +130,20 @@ class TabularPredictor:
                 except Exception as e:
                     log.warning("Model %s CV error: %s", name, e)
 
-        # Final fit on all data + isotonic calibration
-        # (plan upgrade #1: well-calibrated probabilities → confidence is reliable)
+        # Final fit: 80% train, 20% calibration (no leakage)
+        X_scaled = self.scaler.fit_transform(X)
+        split = max(50, int(len(X_scaled) * 0.80))
+        X_tr, X_cal = X_scaled[:split], X_scaled[split:]
+        y_tr, y_cal = y[:split], y[split:]
+
         for name in self.MODEL_NAMES:
             try:
                 base = self.models[name]
-                base.fit(X_scaled, y)  # type: ignore[union-attr]
-                # Wrap with isotonic calibration when we have enough rows
-                if len(X_scaled) >= 200:
+                base.fit(X_tr, y_tr)  # type: ignore[union-attr]
+                if len(X_cal) >= 50:
                     try:
                         cal = CalibratedClassifierCV(base, method="isotonic", cv="prefit")  # type: ignore[arg-type]
-                        cal.fit(X_scaled, y)
+                        cal.fit(X_cal, y_cal)
                         self.models[name] = cal
                     except Exception as ce:
                         log.warning("Calibration failed for %s: %s — using uncalibrated", name, ce)

@@ -26,14 +26,17 @@ def _ratio_ok(ratio: float, target: object) -> bool:
     return t * (1 - TOL) <= ratio <= t * (1 + TOL)
 
 
-def _swing_pivots(c: pd.Series, n: int = 5) -> list[float]:
-    """Return last N significant swing pivot prices."""
+def _swing_pivots(df: pd.DataFrame, n: int = 5) -> list[float]:
+    """Return alternating swing high/low prices using actual H/L candle data."""
     pivots: list[float] = []
-    for i in range(n, len(c) - n):
-        w = c.iloc[i - n: i + n + 1]
-        if float(c.iloc[i]) == float(w.max()) or float(c.iloc[i]) == float(w.min()):
-            pivots.append(float(c.iloc[i]))
-    return pivots[-10:]  # last 10 pivots
+    for i in range(n, len(df) - n):
+        h_win = df["high"].iloc[i - n: i + n + 1]
+        l_win = df["low"].iloc[i - n: i + n + 1]
+        if float(df["high"].iloc[i]) == float(h_win.max()):
+            pivots.append(float(df["high"].iloc[i]))
+        elif float(df["low"].iloc[i]) == float(l_win.min()):
+            pivots.append(float(df["low"].iloc[i]))
+    return pivots[-10:]
 
 
 def detect_harmonics(df: pd.DataFrame) -> dict[str, int]:
@@ -41,7 +44,7 @@ def detect_harmonics(df: pd.DataFrame) -> dict[str, int]:
     if len(df) < 30:
         return result
 
-    pivots = _swing_pivots(df["close"], 3)
+    pivots = _swing_pivots(df, 3)
     if len(pivots) < 5:
         return result
 

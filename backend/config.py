@@ -8,54 +8,31 @@ REDIS_URL     = os.getenv("REDIS_URL",     "redis://localhost:6379")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "")
 
-# ── Pairs (user-curated, 12 total) ───────────────────────────────
-# Curated list — fewer pairs gives the AI more training cycles per pair
-# and tighter signal accuracy.
-
-# Forex majors + Gold (8) — Deriv API
+# ── Pairs (8 Forex majors + Gold) ────────────────────────────────
 FOREX_PAIRS = [
+    "frxXAUUSD",   # XAU/USD (Gold)
     "frxEURUSD",   # EUR/USD
     "frxGBPUSD",   # GBP/USD
     "frxUSDJPY",   # USD/JPY
-    "frxUSDCHF",   # USD/CHF
-    "frxUSDCAD",   # USD/CAD
     "frxAUDUSD",   # AUD/USD
+    "frxUSDCAD",   # USD/CAD
     "frxNZDUSD",   # NZD/USD
-    "frxXAUUSD",   # XAU/USD (Gold)
+    "frxUSDCHF",   # USD/CHF
 ]
 
-# US Indices + Commodities (3) — Deriv OTC symbols
-# Display labels are mapped on the frontend (OTC_NDX → USTEC, etc.)
-INDEX_PAIRS = [
-    "OTC_NDX",        # USTEC (US Tech 100 / Nasdaq)
-    "OTC_DJI",        # US30 (Wall Street 30 / Dow)
-    "OTC_OIL_WTI",    # USOIL (WTI Crude). Symbol varies by Deriv account
-                      # tier; if your token doesn't expose it, swap to
-                      # "frxBROUSD" (Brent) or remove this line.
-]
-
-# Crypto (1) — Coinbase Exchange
-CRYPTO_PAIRS = [
-    "BTCUSDT",
-]
-
-# Combined — order matters for default-pair selection (first = default)
-ALL_PAIRS = FOREX_PAIRS + INDEX_PAIRS + CRYPTO_PAIRS
+# No index or crypto pairs — keeps training cycles focused per pair
+ALL_PAIRS = list(FOREX_PAIRS)
 
 # ── Candle Count ────────────────────────────────────────────────────
 CANDLE_COUNT = {
-    60:    500,
-    120:   300,
-    300:   300,
-    900:   200,
-    3600:  200,
-    14400: 150,
+    60:    1000,
+    120:   500,
+    300:   500,
+    900:   300,
+    3600:  300,
+    14400: 200,
 }
-CHART_DISPLAY_COUNT = {
-    60: 300, 120: 200, 300: 200,
-    900: 150, 3600: 100, 14400: 100,
-}
-HISTORY_COUNT = 5000
+HISTORY_COUNT = 10000
 
 # ── AI Training ──────────────────────────────────────────────────
 MIN_CANDLES   = 150

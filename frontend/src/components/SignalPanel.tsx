@@ -4,7 +4,7 @@ import styles from "./SignalPanel.module.css";
 
 const GRADE_COLOR: Record<string, string> = {
   ELITE:    "var(--gold-neon)",
-  HIGH:     "var(--green-neon)",
+  HIGH:     "var(--blue-neon)",
   MODERATE: "var(--orange-neon)",
 };
 
@@ -40,7 +40,7 @@ function ConfidenceBar({ value, color }: { value: number; color: string }) {
   );
 }
 
-function CountdownTimer({ expiryBars }: { expiryBars: number }) {
+function CountdownTimer({ expiryBars, color }: { expiryBars: number; color: string }) {
   return (
     <div className={styles.timer}>
       <svg width="44" height="44" viewBox="0 0 44 44">
@@ -48,7 +48,7 @@ function CountdownTimer({ expiryBars }: { expiryBars: number }) {
         <circle
           cx="22" cy="22" r="18"
           fill="none"
-          stroke="var(--green-neon)"
+          stroke={color}
           strokeWidth="3"
           strokeLinecap="round"
           strokeDasharray="113"
@@ -145,7 +145,7 @@ export function SignalPanel() {
           <span className={styles.gradeLabel} style={{ color: GRADE_COLOR[signal.grade] }}>
             {signal.grade}
           </span>
-          <CountdownTimer expiryBars={signal.expiry_bars} />
+          <CountdownTimer expiryBars={signal.expiry_bars} color={color} />
         </div>
         <ConfidenceBar value={signal.confidence} color={color} />
 

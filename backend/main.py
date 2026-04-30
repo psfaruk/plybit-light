@@ -41,7 +41,6 @@ from timing_engine import aggregate_samples
 from window_selector import WindowSelector
 
 import deriv as deriv_client
-import binance as binance_client
 from tick_store import tick_store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -113,7 +112,7 @@ async def startup() -> None:
         stacking_models[pair]  = StackingEnsemble()
         loss_streak[pair]      = 0
 
-    # Start background tasks
+    # Start background tasks (no crypto listener — forex only)
     asyncio.create_task(redis_subscriber())
     asyncio.create_task(news_refresher())
     asyncio.create_task(initial_history_loader())
@@ -136,15 +135,10 @@ async def initial_history_loader() -> None:
 
 
 async def load_history_for_pair(pair: str) -> None:
-    is_crypto = pair in config.CRYPTO_PAIRS
-
     for granularity in list(config.CANDLE_COUNT.keys()):
         try:
             async with _history_sem:
-                if is_crypto:
-                    candles = await binance_client.fetch_history(pair, granularity)
-                else:
-                    candles = await deriv_client.fetch_history(pair, granularity)
+                candles = await deriv_client.fetch_history(pair, granularity)
 
             if candles:
                 candle_store[pair][granularity] = candles
@@ -210,10 +204,7 @@ async def train_models_for_pair(pair: str) -> None:
 # ── Redis Subscriber ─────────────────────────────────────────
 
 async def redis_subscriber() -> None:
-    # Always run direct exchange listeners for live ticks.
-    # Redis pub/sub is only populated by the Go streamer; without it we need fallbacks.
     asyncio.create_task(direct_deriv_listener())
-    asyncio.create_task(direct_binance_listener())
 
     if redis_client is None:
         log.info("Redis not available — direct Deriv listener only")
@@ -271,8 +262,8 @@ async def direct_deriv_listener() -> None:
                     backoff = min(backoff * 2, backoff_max)
                     continue
 
-                # Subscribe to forex + indices/commodities (all Deriv-served)
-                deriv_subs = list(config.FOREX_PAIRS) + list(getattr(config, "INDEX_PAIRS", []))
+                # Subscribe to all pairs (forex only)
+                deriv_subs = list(config.FOREX_PAIRS)
                 log.info("Deriv tick listener up — subscribing %d symbols", len(deriv_subs))
                 for pair in deriv_subs:
                     await ws.send(json.dumps({"ticks": pair, "subscribe": 1}))
@@ -304,81 +295,6 @@ async def direct_deriv_listener() -> None:
         backoff = min(backoff * 2, backoff_max)
 
 
-def _to_coinbase(sym: str) -> str:
-    """BTCUSDT → BTC-USD (Coinbase native quote)."""
-    return sym.replace("USDT", "") + "-USD"
-
-
-def _from_coinbase(product_id: str) -> str:
-    """BTC-USD → BTCUSDT (our internal symbol)."""
-    return product_id.replace("-USD", "USDT")
-
-
-async def direct_binance_listener() -> None:
-    """
-    Lossless crypto tick capture via Coinbase Exchange WebSocket.
-
-    Function name kept for legacy. Coinbase is a US-based exchange so the WS
-    is reliably accessible from US cloud datacenters (Binance.com → 451,
-    Bybit → 403, Binance.US WS silently filtered on Railway).
-    """
-    import websockets as ws_lib
-
-    url         = "wss://ws-feed.exchange.coinbase.com"
-    backoff     = 1.0
-    backoff_max = 60.0
-
-    while True:
-        try:
-            async with ws_lib.connect(
-                url, ping_interval=15, ping_timeout=30, close_timeout=5,
-                max_size=2 ** 20,
-            ) as ws:
-                product_ids = [_to_coinbase(p) for p in config.CRYPTO_PAIRS]
-                await ws.send(json.dumps({
-                    "type":        "subscribe",
-                    "product_ids": product_ids,
-                    "channels":    ["matches"],
-                }))
-                log.info("Coinbase listener subscribing %d pairs: %s",
-                         len(product_ids), ",".join(product_ids))
-                backoff = 1.0
-
-                while True:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=60)
-                    msg = json.loads(raw)
-                    mtype = msg.get("type")
-
-                    if mtype in ("subscriptions", "heartbeat"):
-                        continue
-                    if mtype == "error":
-                        log.error("Coinbase WS error: %s", msg.get("message"))
-                        continue
-
-                    # match (trade) or last_match
-                    if mtype in ("match", "last_match"):
-                        product_id = str(msg.get("product_id", ""))
-                        price      = float(msg.get("price", 0))
-                        time_str   = str(msg.get("time", ""))
-                        if price <= 0 or not product_id:
-                            continue
-                        # Parse ISO 8601 → epoch seconds
-                        try:
-                            from datetime import datetime as _dt
-                            epoch = _dt.fromisoformat(time_str.replace("Z", "+00:00")).timestamp()
-                        except Exception:
-                            epoch = time.time()
-                        pair_sym = _from_coinbase(product_id)
-                        if pair_sym in config.CRYPTO_PAIRS:
-                            await _process_tick(pair_sym, price, epoch)
-
-        except asyncio.TimeoutError:
-            log.warning("Coinbase stream silent > 60s — reconnecting")
-        except Exception as e:
-            log.error("Coinbase listener error: %s — reconnecting in %.1fs", e, backoff)
-
-        await asyncio.sleep(backoff)
-        backoff = min(backoff * 2, backoff_max)
 
 
 async def _process_tick(pair: str, price: float, epoch: float) -> None:
@@ -644,7 +560,7 @@ async def _run_signal_pipeline(
     sd       = {k: float(v) for k, v in advanced.items() if k.startswith("sd_")}
 
     # ── Candle Reaction ──────────────────────────────────────
-    reaction = compute_candle_reaction(df_1m)
+    reaction = compute_candle_reaction(df_1m, smc=smc)
 
     # ── Harmonic Patterns ────────────────────────────────────
     harmonics = detect_harmonics(df_1m)
@@ -671,11 +587,29 @@ async def _run_signal_pipeline(
     all_model_probs: dict[str, float] = {}
     all_model_probs.update(tab_probs)  # type: ignore[arg-type]
     all_model_probs.update(deep_probs)
-    all_model_probs["rule"]  = rule_conf if rule_dir != "SKIP" else 0.5
+    # Bug 1.3 fix: convert RED confidence to GREEN probability space
+    if rule_dir == "GREEN":
+        all_model_probs["rule"] = rule_conf
+    elif rule_dir == "RED":
+        all_model_probs["rule"] = 1.0 - rule_conf
+    else:
+        all_model_probs["rule"] = 0.5
     all_model_probs["bayes"] = float(bayes.get("bayes_mean", 0.5))
 
+    # Bug 4.10 fix: accuracy-weighted fusion instead of plain mean
     if all_model_probs:
-        base_fused = float(np.mean(list(all_model_probs.values())))
+        _weights: list[float] = []
+        _probs:   list[float] = []
+        for _name, _prob in all_model_probs.items():
+            _acc = float(
+                (tab.model_accuracies.get(_name) if tab else None)
+                or (dp.accuracy_map.get(_name) if dp else None)
+                or 0.52
+            )
+            _weights.append(max(0.02, _acc - 0.50))
+            _probs.append(_prob)
+        _total_w = sum(_weights) or 1.0
+        base_fused = float(sum(p * w for p, w in zip(_probs, _weights)) / _total_w)
     else:
         base_fused = 0.5
 
@@ -716,7 +650,7 @@ async def _run_signal_pipeline(
 
     # ── 4-Layer Scoring ──────────────────────────────────────
     mtf_pts    = mtf_score_pts(mtf)
-    smc_pts    = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott)
+    smc_pts    = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott, direction=direction)
     react_pts  = reaction_score_pts(reaction)
     ai_pts_val = ai_score_pts(base_fused, meta_prob)
 
@@ -824,7 +758,7 @@ def _check_signal_gates(pair: str, df: pd.DataFrame) -> str:
     now = time.time()
 
     # Market closed (Forex: Fri 21:00 – Sun 21:00 UTC)
-    if pair not in config.CRYPTO_PAIRS:
+    if True:  # all pairs are forex
         dt  = datetime.now(timezone.utc)
         dow = dt.weekday()  # 0=Mon, 5=Sat, 6=Sun
         h   = dt.hour
@@ -937,23 +871,19 @@ async def get_market_hours() -> dict[str, Any]:
             "Friday 21:00 UTC → Saturday (all day)",
             "Sunday (all day until 21:00 UTC)",
         ],
-        "note": "Crypto markets trade 24/7",
+        "note": "Forex trades Sunday 21:00 – Friday 21:00 UTC",
     }
 
 
 @app.get("/api/pairs")
 async def get_pairs() -> dict[str, Any]:
-    return {
-        "forex":  config.FOREX_PAIRS,
-        "crypto": config.CRYPTO_PAIRS,
-        "status": "ok",
-    }
+    return {"forex": config.FOREX_PAIRS, "status": "ok"}
 
 
 @app.get("/api/candles/{pair}")
-async def get_candles(pair: str, granularity: int = 60, count: int = 300) -> dict[str, Any]:
+async def get_candles(pair: str, granularity: int = 60, count: int = 5000) -> dict[str, Any]:
     candles = candle_store.get(pair, {}).get(granularity, [])
-    return {"pair": pair, "granularity": granularity, "candles": candles[-count:]}
+    return {"pair": pair, "granularity": granularity, "candles": candles[-count:] if count > 0 else candles}
 
 
 @app.get("/api/signal/{pair}")

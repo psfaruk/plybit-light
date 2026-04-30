@@ -123,7 +123,7 @@ export const useStore = create<PlaybitState>((set, get) => ({
     const idx      = existing.findIndex((x) => x.epoch === c.epoch);
     if (idx >= 0) existing[idx] = c;
     else          existing.push(c);
-    if (existing.length > 500) existing.splice(0, existing.length - 500);
+    if (existing.length > 5000) existing.splice(0, existing.length - 5000);
     return { candles: { ...state.candles, [tf]: existing }, livePrice: c.close };
   }),
   setHistory: (tf, cs) => set((state) => ({

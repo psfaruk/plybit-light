@@ -76,22 +76,30 @@ def compute_smc_features(df: pd.DataFrame, utc_hour: int = 0) -> dict:
     features["swing_high_5"] = swing_highs[-1][1] if swing_highs else h.max()
     features["swing_low_5"]  = swing_lows[-1][1]  if swing_lows  else l.min()
 
-    # BOS detection
-    if len(swing_highs) >= 2 and price > swing_highs[-1][1]:
+    # Bug 5.1 fix: use prev closed candle price (not live tick) for BOS
+    prev_closed = float(c.iloc[-2]) if len(c) >= 2 else float(c.iloc[-1])
+    if len(swing_highs) >= 2 and prev_closed > swing_highs[-1][1]:
         features["bullish_bos"] = 1
         features["bearish_bos"] = 0
-    elif len(swing_lows) >= 2 and price < swing_lows[-1][1]:
+    elif len(swing_lows) >= 2 and prev_closed < swing_lows[-1][1]:
         features["bearish_bos"] = 1
         features["bullish_bos"] = 0
     else:
         features["bullish_bos"] = 0
         features["bearish_bos"] = 0
 
-    # ChoCh: break in opposite direction after structure shift
-    recent_dir = 1 if c.iloc[-1] > c.iloc[-5] else -1
-    prev_dir   = 1 if c.iloc[-5] > c.iloc[-10] else -1
-    features["bullish_choch"] = int(recent_dir ==  1 and prev_dir == -1)
-    features["bearish_choch"] = int(recent_dir == -1 and prev_dir ==  1)
+    # Bug 5.2 fix: swing-based ChoCh detection
+    features["bullish_choch"] = 0
+    features["bearish_choch"] = 0
+    if len(swing_highs) >= 2 and len(swing_lows) >= 2:
+        last_sh, prior_sh = swing_highs[-1][1], swing_highs[-2][1]
+        last_sl, prior_sl = swing_lows[-1][1],  swing_lows[-2][1]
+        # Bullish ChoCh: broke above lower-high (downtrend reversal)
+        if prev_closed > last_sh and last_sh < prior_sh:
+            features["bullish_choch"] = 1
+        # Bearish ChoCh: broke below higher-low (uptrend reversal)
+        elif prev_closed < last_sl and last_sl > prior_sl:
+            features["bearish_choch"] = 1
 
     # ── Order Blocks ─────────────────────────────────────────
     bull_obs, bear_obs = _find_order_blocks(df)
@@ -141,7 +149,16 @@ def compute_smc_features(df: pd.DataFrame, utc_hour: int = 0) -> dict:
     features["in_premium_zone"]  = int(price_pos > 0.618)
     features["at_equilibrium"]   = int(0.45 < price_pos < 0.55)
     features["in_discount_zone"] = int(price_pos < 0.382)
-    features["in_ote_zone"]      = int(0.62 < price_pos < 0.79)
+
+    # Bug 5.3 fix: OTE uses actual swing retracement, not 50-candle range
+    sw_high = swing_highs[-1][1] if swing_highs else float(h.tail(20).max())
+    sw_low  = swing_lows[-1][1]  if swing_lows  else float(l.tail(20).min())
+    sw_range = sw_high - sw_low + 1e-10
+    bull_retrace = (sw_high - price) / sw_range
+    bear_retrace = (price - sw_low)  / sw_range
+    features["in_ote_zone_bull"] = int(0.62 < bull_retrace < 0.79)
+    features["in_ote_zone_bear"] = int(0.62 < bear_retrace < 0.79)
+    features["in_ote_zone"]      = int(features["in_ote_zone_bull"] or features["in_ote_zone_bear"])
 
     # ── Sessions (Killzones) ─────────────────────────────────
     features["kz_asian"]       = int(0  <= utc_hour < 3)
@@ -206,6 +223,7 @@ def _empty_smc() -> dict:
         "liquidity_swept": 0,
         "in_premium_zone": 0, "at_equilibrium": 1,
         "in_discount_zone": 0, "in_ote_zone": 0,
+        "in_ote_zone_bull": 0, "in_ote_zone_bear": 0,
         "kz_asian": 0, "kz_london": 0, "kz_newyork": 0,
         "kz_overlap": 0, "kz_london_close": 0, "kz_gold": 0,
         "trend": "range",
