@@ -76,8 +76,8 @@ PRE_CLOSE_INTERVAL    = 0.5
 
 # ── 5M Window ────────────────────────────────────────────────────────────
 WINDOW_SIZE_SEC        = 300
-MAX_SIGNALS_PER_WINDOW = 3
-MIN_WINDOW_POSITION    = 1
+MAX_SIGNALS_PER_WINDOW = int(os.getenv("MAX_SIGNALS_PER_WINDOW", "3"))
+MIN_WINDOW_POSITION    = int(os.getenv("MIN_WINDOW_POSITION", "0"))
 
 # ── MTF Analysis ─────────────────────────────────────────────────────
 MTF_ANALYSIS_TFS  = [3600, 900, 300, 120]
@@ -90,10 +90,11 @@ APP_TF_PRIMARY   = [60, 300, 900]
 APP_TF_SECONDARY = [120, 3600, 14400]
 
 # ── Signal Quality ─────────────────────────────────────────────────────
-GRADE_ELITE    = 0.82  # 👑
-GRADE_HIGH     = 0.75  # ✅
-GRADE_MODERATE = 0.65  # ⚡  (plan: < 0.65 → SKIP, no signal)
-SIGNAL_THRESHOLD        = 0.75
+GRADE_ELITE    = float(os.getenv("GRADE_ELITE", "0.82"))  # 👑
+GRADE_HIGH     = float(os.getenv("GRADE_HIGH", "0.75"))   # ✅
+GRADE_MODERATE = float(os.getenv("GRADE_MODERATE", "0.60"))  # ⚡
+TELEGRAM_MIN_GRADE      = os.getenv("TELEGRAM_MIN_GRADE", "MODERATE").upper()
+SIGNAL_THRESHOLD        = float(os.getenv("SIGNAL_THRESHOLD", str(GRADE_MODERATE)))
 SIGNAL_CONFIRM_REQUIRED = 8
 SIGNAL_MIN_EMIT_CONFIRM = 6
 

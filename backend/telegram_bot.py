@@ -1,8 +1,8 @@
-"""Telegram alert sender for HIGH+ grade signals."""
+"""Telegram alert sender for configured minimum grade signals."""
 
 import asyncio
 import logging
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GRADE_HIGH
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_MIN_GRADE
 
 log = logging.getLogger(__name__)
 
@@ -104,9 +104,11 @@ def _format_message(signal: dict[str, object], pair: str) -> str:
 
 
 async def send_signal_alert(signal: dict[str, object], pair: str) -> None:
-    """Send Telegram alert for HIGH+ signals."""
+    """Send Telegram alert for signals at or above TELEGRAM_MIN_GRADE."""
     grade_str = str(signal.get("grade", "SKIP"))
-    if grade_str not in ("ELITE", "HIGH"):
+    grade_rank = {"SKIP": 0, "MODERATE": 1, "HIGH": 2, "ELITE": 3}
+    min_rank = grade_rank.get(TELEGRAM_MIN_GRADE, grade_rank["MODERATE"])
+    if grade_rank.get(grade_str, 0) < min_rank:
         return
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return

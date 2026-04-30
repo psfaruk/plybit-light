@@ -55,7 +55,7 @@ class WindowSelector:
             self._window_signals   = []
 
         if pos_idx < MIN_WINDOW_POSITION:
-            return False  # skip minute 0
+            return False
 
         if confidence < GRADE_MODERATE:
             return False
