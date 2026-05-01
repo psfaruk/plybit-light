@@ -722,12 +722,6 @@ async def _run_signal_pipeline(
         meta_prob >= 0.60, adx, kalman_agree, kv,
     )
 
-    # AI-aligned blend: a strongly-confident AI vote should not be killed by
-    # weak SMC/reaction context. Take the better of layer-score or direction-
-    # aligned AI confidence (with a small handicap so scoring still matters).
-    ai_aligned = base_fused if direction == "GREEN" else (1.0 - base_fused)
-    confidence = max(confidence, ai_aligned - 0.10)
-
     h_boost = harmonic_confidence_boost(harmonics, direction)
     confidence = min(confidence + h_boost, 0.99)
 
@@ -753,11 +747,28 @@ async def _run_signal_pipeline(
     confidence = apply_consensus_penalty(confidence, cons_score)
 
     # ── Soft penalties for conflicting context ──────────────
-    # MTF direction opposes signal direction — strongest penalty
-    if mtf_dir_str != "neutral":
+    # MTF opposition — grade by how many senior TFs disagree
+    _tfs_d     = mtf.get("tfs", {})
+    _h1_bias   = str(_tfs_d.get("1h",  {}).get("bias", "neutral")) if isinstance(_tfs_d.get("1h"),  dict) else "neutral"  # type: ignore[union-attr]
+    _m15_bias  = str(_tfs_d.get("15m", {}).get("bias", "neutral")) if isinstance(_tfs_d.get("15m"), dict) else "neutral"  # type: ignore[union-attr]
+    _opposing_h1  = (direction == "GREEN" and _h1_bias  == "bear") or (direction == "RED" and _h1_bias  == "bull")
+    _opposing_m15 = (direction == "GREEN" and _m15_bias == "bear") or (direction == "RED" and _m15_bias == "bull")
+    if _opposing_h1 and _opposing_m15:
+        confidence *= 0.60   # both senior TFs oppose — strong block
+    elif _opposing_h1 or _opposing_m15:
+        confidence *= 0.80   # one senior TF opposes — moderate penalty
+    elif mtf_dir_str != "neutral":
         if (direction == "GREEN" and mtf_dir_str == "bear") or \
            (direction == "RED"   and mtf_dir_str == "bull"):
-            confidence *= 0.85
+            confidence *= 0.88  # only lower TFs oppose — mild penalty
+
+    # Majority-vote gate: if ≥60% of all models oppose direction, penalise
+    _all_probs = list(all_model_probs.values())
+    if _all_probs:
+        _oppose_count = sum(1 for p in _all_probs if (direction == "GREEN" and p < 0.50) or (direction == "RED" and p > 0.50))
+        if _oppose_count / len(_all_probs) >= 0.60:
+            confidence *= 0.75
+
     if mtf_agreement < config.MTF_MIN_AGREEMENT:
         confidence *= 0.92
     if ppo_skip:
@@ -768,14 +779,19 @@ async def _run_signal_pipeline(
         confidence *= 0.92
     # Note: ADX < 15 already penalised inside score_to_confidence; no second pass here.
 
-    # ATR-spike (volatility): current candle range > 3× rolling ATR
+    # ATR-spike: large candle = institutional move already in progress.
+    # Reduce confidence rather than trade into a fast-moving candle.
     if len(df_1m) >= 21:
         try:
             atr_series_p   = (df_1m["high"] - df_1m["low"]).rolling(14).mean()
             current_range  = float(df_1m["high"].iloc[-1] - df_1m["low"].iloc[-1])
             prev_avg_range = float(atr_series_p.iloc[-2])
-            if prev_avg_range > 0 and current_range > 3 * prev_avg_range:
-                confidence *= 0.85
+            if prev_avg_range > 0:
+                _atr_ratio = current_range / (prev_avg_range + 1e-10)
+                if _atr_ratio > 3.0:
+                    confidence *= 0.65   # very large spike
+                elif _atr_ratio > 2.0:
+                    confidence *= 0.80   # moderate spike
         except Exception:
             pass
 

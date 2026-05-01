@@ -181,7 +181,9 @@ def _predict_torch(model: nn.Module, x: np.ndarray) -> float:
         xt  = torch.tensor(x, dtype=torch.float32).to(DEVICE)
         out = model(xt)
         prob = float(torch.softmax(out, dim=1)[0, 1].cpu())
-    return prob
+    # Clamp to [0.15, 0.85] — uncalibrated deep models output near-1 probs
+    # that dominate the weighted average and mask disagreement from other models.
+    return max(0.15, min(0.85, prob))
 
 
 # ── Main class ───────────────────────────────────────────────

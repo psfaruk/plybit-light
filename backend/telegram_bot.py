@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_MIN_GRADE
 
 log = logging.getLogger(__name__)
@@ -22,6 +23,14 @@ def _dir_emoji(direction: str) -> str:
     return "🟢" if direction == "GREEN" else "🔴"
 
 
+_MODEL_LABELS: dict[str, str] = {
+    "lstm": "LSTM", "cnn": "CNN", "attn": "ATTN", "tcn": "TCN", "nbeats": "N-BEATS",
+    "bayes": "BAYES", "rule": "RULE",
+    "xgboost": "XGB", "lightgbm": "LGB", "catboost": "CAT",
+    "randomforest": "RF", "extratrees": "ET", "histgb": "HGB",
+}
+
+
 def _format_message(signal: dict[str, object], pair: str) -> str:
     d          = signal.get("signal", "?")
     conf       = float(signal.get("confidence", 0)) * 100
@@ -30,10 +39,21 @@ def _format_message(signal: dict[str, object], pair: str) -> str:
     smc        = signal.get("smc_context", {})
     react      = signal.get("candle_reaction", {})
     models     = signal.get("ai_models", {})
-    patterns   = signal.get("patterns", [])
+    open_ts    = signal.get("candle_open_time")
+    close_ts   = signal.get("candle_close_time")
     is_green   = d == "GREEN"
 
     pair_clean = pair.replace("frx", "").replace("USDT", "/USDT")
+
+    # Candle time range e.g. "14:23:00-14:24:00"
+    time_line = ""
+    try:
+        if open_ts and close_ts:
+            o_dt = datetime.fromtimestamp(int(open_ts),  tz=timezone.utc)
+            c_dt = datetime.fromtimestamp(int(close_ts), tz=timezone.utc)
+            time_line = f"{o_dt.strftime('%H:%M:%S')}-{c_dt.strftime('%H:%M:%S')}"
+    except Exception:
+        pass
 
     tf_line = ""
     if isinstance(mtf, dict):
@@ -48,7 +68,7 @@ def _format_message(signal: dict[str, object], pair: str) -> str:
             tf_line = " ".join(parts)
         kz = mtf.get("killzone", "none")
         if kz and kz != "none":
-            tf_line += f"\n⚡ KZ: {kz.title()} Open Active"
+            tf_line += f"  ⚡️ {kz.title()} KZ"
 
     smc_line = ""
     if isinstance(smc, dict):
@@ -79,36 +99,37 @@ def _format_message(signal: dict[str, object], pair: str) -> str:
     if isinstance(react, dict):
         net = float(react.get("net_score", 0))
         aligned_net = net if is_green else -net
-        pin  = "PIN✓" if (is_green and react.get("pin_bull")) or (not is_green and react.get("pin_bear")) else ""
-        eng  = "ENG✓" if (is_green and react.get("bull_engulf")) or (not is_green and react.get("bear_engulf")) else ""
+        pin = "PIN✓" if (is_green and react.get("pin_bull")) or (not is_green and react.get("pin_bear")) else ""
+        eng = "ENG✓" if (is_green and react.get("bull_engulf")) or (not is_green and react.get("bear_engulf")) else ""
         flags = " ".join(f for f in [pin, eng] if f)
-        react_line = f"Net {int(aligned_net):+d}  {flags}".strip()
+        react_line = f"Net {int(aligned_net):+d}" + (f"  {flags}" if flags else "")
 
     top_models = ""
     if isinstance(models, dict):
-        aligned = [(k, (v if is_green else 1.0 - v)) for k, v in models.items()]
+        aligned = [
+            (_MODEL_LABELS.get(k.lower(), k.upper()), (v if is_green else 1.0 - v))
+            for k, v in models.items()
+        ]
         aligned.sort(key=lambda x: x[1], reverse=True)
-        top_models = " | ".join(f"{k.upper()} {int(v*100)}%" for k, v in aligned[:3])
+        top_models = " | ".join(f"{lbl} {int(v*100)}%" for lbl, v in aligned[:3])
 
-    pattern_line = ", ".join(str(p) for p in patterns[:3]) if patterns else ""
-
-    # HTML format — more robust than MarkdownV2 with special chars
+    # Build HTML message — layout matches user spec
     action = "CALL / BUY" if is_green else "PUT / SELL"
     msg  = f"{_dir_emoji(d)} <b>{pair_clean}</b> — {d} ({action})\n"
     msg += f"Grade: {_grade_emoji(grade_str)} {grade_str}  |  Confidence: {conf:.1f}%\n"
+    if time_line:
+        msg += f"\n(Time {time_line})\n"
     msg += f"Trade: Time Candle 1M  |  Entry: IMMEDIATE\n"
     if tf_line:
-        msg += f"\n📊 <b>MTF:</b> {tf_line}\n"
+        msg += f"\n📊 MTF: {tf_line}\n"
     if smc_line:
-        msg += f"🏛️ <b>SMC:</b> {smc_line}\n"
+        msg += f"🏛 SMC: {smc_line}\n"
     if react_line:
-        msg += f"⚡ <b>Reaction:</b> {react_line}\n"
+        msg += f"⚡️ Reaction: {react_line}\n"
     if top_models:
-        msg += f"🤖 <b>Top Models:</b> {top_models}\n"
-    if pattern_line:
-        msg += f"📐 <b>Patterns:</b> {pattern_line}\n"
+        msg += f"🤖 Top Models: {top_models}\n"
     msg += f"\n⏰ Max delay: 5 seconds!"
-    msg += f"\n#PlaybitAI #{pair_clean.replace('/', '')}"
+    msg += f"\n#PlybitAI #{pair_clean.replace('/', '')}"
 
     return msg
 
