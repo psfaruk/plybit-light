@@ -31,6 +31,7 @@ def _format_message(signal: dict[str, object], pair: str) -> str:
     react      = signal.get("candle_reaction", {})
     models     = signal.get("ai_models", {})
     patterns   = signal.get("patterns", [])
+    is_green   = d == "GREEN"
 
     pair_clean = pair.replace("frx", "").replace("USDT", "/USDT")
 
@@ -39,7 +40,7 @@ def _format_message(signal: dict[str, object], pair: str) -> str:
         tfs = mtf.get("tfs", {})
         if isinstance(tfs, dict):
             parts = []
-            for tf, label in [("1h","1H"), ("15m","15M"), ("5m","5M"), ("2m","2M")]:
+            for tf, label in [("1h", "1H"), ("15m", "15M"), ("5m", "5M"), ("2m", "2M")]:
                 v = tfs.get(tf, {})
                 b = v.get("bias", "?") if isinstance(v, dict) else "?"
                 arrow = "↑" if b == "bull" else ("↓" if b == "bear" else "→")
@@ -52,52 +53,61 @@ def _format_message(signal: dict[str, object], pair: str) -> str:
     smc_line = ""
     if isinstance(smc, dict):
         checks = []
-        if smc.get("price_at_bullish_ob") or smc.get("price_at_bearish_ob"):
+        if is_green and smc.get("price_at_bullish_ob"):
             checks.append("OB✓")
-        if smc.get("price_in_bullish_fvg") or smc.get("price_in_bearish_fvg"):
+        elif not is_green and smc.get("price_at_bearish_ob"):
+            checks.append("OB✓")
+        if is_green and smc.get("price_in_bullish_fvg"):
             checks.append("FVG✓")
-        if smc.get("bullish_bos") or smc.get("bearish_bos"):
+        elif not is_green and smc.get("price_in_bearish_fvg"):
+            checks.append("FVG✓")
+        if is_green and smc.get("bullish_bos"):
             checks.append("BOS✓")
-        if smc.get("in_ote_zone"):
+        elif not is_green and smc.get("bearish_bos"):
+            checks.append("BOS✓")
+        if is_green and smc.get("in_ote_zone_bull"):
             checks.append("OTE✓")
+        elif not is_green and smc.get("in_ote_zone_bear"):
+            checks.append("OTE✓")
+        elif smc.get("in_ote_zone"):
+            checks.append("OTE✓")
+        if smc.get("liquidity_swept"):
+            checks.append("LQ✓")
         smc_line = " ".join(checks)
 
     react_line = ""
     if isinstance(react, dict):
-        bull_r = int(float(react.get("bull_score", 0)))
-        bear_r = int(float(react.get("bear_score", 0)))
-        pin    = "PIN✓" if react.get("pin_bar") else ""
-        react_line = f"Bull {bull_r} | Bear {bear_r} {pin}"
+        net = float(react.get("net_score", 0))
+        aligned_net = net if is_green else -net
+        pin  = "PIN✓" if (is_green and react.get("pin_bull")) or (not is_green and react.get("pin_bear")) else ""
+        eng  = "ENG✓" if (is_green and react.get("bull_engulf")) or (not is_green and react.get("bear_engulf")) else ""
+        flags = " ".join(f for f in [pin, eng] if f)
+        react_line = f"Net {int(aligned_net):+d}  {flags}".strip()
 
     top_models = ""
     if isinstance(models, dict):
-        # Show top models *aligned with the signal direction*. For RED, the
-        # most confident model is the one with the lowest raw prob (= highest
-        # bearish prob); convert to direction-aligned percentage first.
-        is_green = d == "GREEN"
         aligned = [(k, (v if is_green else 1.0 - v)) for k, v in models.items()]
         aligned.sort(key=lambda x: x[1], reverse=True)
         top_models = " | ".join(f"{k.upper()} {int(v*100)}%" for k, v in aligned[:3])
 
     pattern_line = ", ".join(str(p) for p in patterns[:3]) if patterns else ""
 
-    msg = (
-        f"{_dir_emoji(d)} *{pair_clean}* — {d} (CALL/BUY)" if d == "GREEN"
-        else f"{_dir_emoji(d)} *{pair_clean}* — {d} (PUT/SELL)"
-    )
-    msg += f"\nGrade: {_grade_emoji(grade_str)} {grade_str} | Confidence: {conf:.1f}%"
-    msg += f"\nTrade: Time Candle 1M | Entry: IMMEDIATE"
+    # HTML format — more robust than MarkdownV2 with special chars
+    action = "CALL / BUY" if is_green else "PUT / SELL"
+    msg  = f"{_dir_emoji(d)} <b>{pair_clean}</b> — {d} ({action})\n"
+    msg += f"Grade: {_grade_emoji(grade_str)} {grade_str}  |  Confidence: {conf:.1f}%\n"
+    msg += f"Trade: Time Candle 1M  |  Entry: IMMEDIATE\n"
     if tf_line:
-        msg += f"\n\n📊 MTF: {tf_line}"
+        msg += f"\n📊 <b>MTF:</b> {tf_line}\n"
     if smc_line:
-        msg += f"\n🏛️ SMC: {smc_line}"
+        msg += f"🏛️ <b>SMC:</b> {smc_line}\n"
     if react_line:
-        msg += f"\n⚡ Reaction: {react_line}"
+        msg += f"⚡ <b>Reaction:</b> {react_line}\n"
     if top_models:
-        msg += f"\n🤖 Top Models: {top_models}"
+        msg += f"🤖 <b>Top Models:</b> {top_models}\n"
     if pattern_line:
-        msg += f"\n📐 Patterns: {pattern_line}"
-    msg += f"\n\n⏰ Max delay: 5 seconds!"
+        msg += f"📐 <b>Patterns:</b> {pattern_line}\n"
+    msg += f"\n⏰ Max delay: 5 seconds!"
     msg += f"\n#PlaybitAI #{pair_clean.replace('/', '')}"
 
     return msg
@@ -122,7 +132,7 @@ async def send_signal_alert(signal: dict[str, object], pair: str) -> None:
         await bot.send_message(
             chat_id=TELEGRAM_CHAT_ID,
             text=msg,
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
         )
         await bot.session.close()
     except Exception as e:

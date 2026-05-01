@@ -639,16 +639,58 @@ async def _run_signal_pipeline(
         stack_prob = stack_model.predict(list(all_model_probs.values()))
         base_fused = stack_model.fuse(base_fused, stack_prob)
 
-    # ── Direction (always resolved; never SKIP at this stage) ─
-    # Fallback chain: AI fused → rule engine → last-bar close diff
-    if tab_dir != "SKIP":
-        direction = "GREEN" if base_fused > 0.5 else "RED"
-    elif rule_dir != "SKIP":
-        direction = rule_dir
+    # ── Direction: multi-source consensus vote ──────────────────
+    # Accumulate weighted evidence for GREEN vs RED.
+    # No single source can override the rest; tie → price momentum.
+    _green_wt = 0.0
+    _red_wt   = 0.0
+
+    # AI vote — only when clearly biased (outside 45–55% band)
+    _ai_deviation = abs(base_fused - 0.50)
+    if base_fused >= 0.55:
+        _green_wt += _ai_deviation * 2.0 * 1.5   # max contribution ~0.75 at fused=0.75
+    elif base_fused <= 0.45:
+        _red_wt   += _ai_deviation * 2.0 * 1.5
+    # 0.45–0.55: AI uncertain → no vote
+
+    # Rule engine
+    if rule_dir == "GREEN":
+        _green_wt += rule_conf * 1.2
+    elif rule_dir == "RED":
+        _red_wt   += rule_conf * 1.2
+
+    # MTF directional weight
+    if mtf_dir_str == "bull":
+        _green_wt += mtf_agreement * 1.0
+    elif mtf_dir_str == "bear":
+        _red_wt   += mtf_agreement * 1.0
+
+    # ADX directional indicator (di_diff = +DI − −DI)
+    _di_diff = float(feat.get("di_diff", 0))
+    if abs(_di_diff) > 8:
+        _di_strength = min(abs(_di_diff) / 50.0, 0.8)
+        if _di_diff > 0:
+            _green_wt += _di_strength
+        else:
+            _red_wt   += _di_strength
+
+    # SMC net score (positive = bullish zone context, negative = bearish)
+    _smc_net = float(smc.get("smc_net_score", 0))
+    if abs(_smc_net) > 15:
+        _smc_strength = min(abs(_smc_net) / 60.0, 0.7)
+        if _smc_net > 0:
+            _green_wt += _smc_strength
+        else:
+            _red_wt   += _smc_strength
+
+    if _green_wt > _red_wt:
+        direction = "GREEN"
+    elif _red_wt > _green_wt:
+        direction = "RED"
     elif len(df_1m) >= 2:
-        last_close = float(df_1m["close"].iloc[-1])
-        prev_close = float(df_1m["close"].iloc[-2])
-        direction  = "GREEN" if last_close >= prev_close else "RED"
+        _last_c = float(df_1m["close"].iloc[-1])
+        _prev_c = float(df_1m["close"].iloc[-2])
+        direction = "GREEN" if _last_c >= _prev_c else "RED"
     else:
         direction = "GREEN" if base_fused >= 0.5 else "RED"
 
