@@ -45,13 +45,25 @@ def _format_message(signal: dict[str, object], pair: str) -> str:
 
     pair_clean = pair.replace("frx", "").replace("USDT", "/USDT")
 
-    # Candle time range e.g. "14:23:00-14:24:00"
+    # Trade entry time range: analysis candle close → trade candle close
+    # open_ts = analysis candle open, close_ts = analysis candle close = trade entry
+    # trade close = close_ts + 60s
     time_line = ""
     try:
         if open_ts and close_ts:
-            o_dt = datetime.fromtimestamp(int(open_ts),  tz=timezone.utc)
-            c_dt = datetime.fromtimestamp(int(close_ts), tz=timezone.utc)
-            time_line = f"{o_dt.strftime('%H:%M:%S')}-{c_dt.strftime('%H:%M:%S')}"
+            entry_dt = datetime.fromtimestamp(int(close_ts),      tz=timezone.utc)
+            exit_dt  = datetime.fromtimestamp(int(close_ts) + 60, tz=timezone.utc)
+            time_line = (
+                f"Entry Time {entry_dt.strftime('%H:%M:%S')}"
+                f"-{exit_dt.strftime('%H:%M:%S')} UTC"
+            )
+        elif open_ts:
+            entry_dt = datetime.fromtimestamp(int(open_ts) + 60,  tz=timezone.utc)
+            exit_dt  = datetime.fromtimestamp(int(open_ts) + 120, tz=timezone.utc)
+            time_line = (
+                f"Entry Time {entry_dt.strftime('%H:%M:%S')}"
+                f"-{exit_dt.strftime('%H:%M:%S')} UTC"
+            )
     except Exception:
         pass
 
@@ -118,7 +130,7 @@ def _format_message(signal: dict[str, object], pair: str) -> str:
     msg  = f"{_dir_emoji(d)} <b>{pair_clean}</b> — {d} ({action})\n"
     msg += f"Grade: {_grade_emoji(grade_str)} {grade_str}  |  Confidence: {conf:.1f}%\n"
     if time_line:
-        msg += f"\n(Time {time_line})\n"
+        msg += f"\n{time_line}\n"
     msg += f"Trade: Time Candle 1M  |  Entry: IMMEDIATE\n"
     if tf_line:
         msg += f"\n📊 MTF: {tf_line}\n"

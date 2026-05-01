@@ -458,15 +458,23 @@ export function SignalPanel() {
       return;
     }
 
+    // candle_close_time = when the ANALYSIS candle closed = trade ENTRY time.
+    // The trade itself is on the next 1M candle → add 60s for trade expiry.
+    // Fallback: use signal.timestamp + 70s if candle_close_time is absent.
     const closeTime = signal.candle_close_time;
-    if (closeTime) {
-      const msUntil = closeTime * 1000 - Date.now();
-      if (msUntil <= 0) {
-        setExpired(true);
-      } else {
-        setExpired(false);
-        timerRef.current = setTimeout(() => setExpired(true), msUntil);
-      }
+    const ts        = (signal as unknown as Record<string, unknown>).timestamp as number | undefined;
+    const expiryMs  = closeTime
+      ? (closeTime + 60) * 1000          // trade candle close
+      : ts
+        ? ts * 1000 + 70_000             // 70s from issue time
+        : Date.now() + 60_000;           // 60s from now as last resort
+
+    const msUntil = expiryMs - Date.now();
+    if (msUntil <= 0) {
+      setExpired(true);
+    } else {
+      setExpired(false);
+      timerRef.current = setTimeout(() => setExpired(true), msUntil);
     }
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [signal]);
