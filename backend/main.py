@@ -575,10 +575,11 @@ async def _run_signal_pipeline(
     inst = compute_institutional(df_1m, utc_hour, utc_minute)
 
     # ── Advanced (Wyckoff, Elliott, S/D) ─────────────────────
-    advanced = compute_all_advanced(df_1m)
-    wyckoff  = {k: int(v) for k, v in advanced.items() if k.startswith("wyckoff")}
-    elliott  = {k: float(v) for k, v in advanced.items() if k.startswith("elliott")}
-    sd       = {k: float(v) for k, v in advanced.items() if k.startswith("sd_")}
+    advanced      = compute_all_advanced(df_1m)
+    wyckoff       = {k: int(v)   for k, v in advanced.items() if k.startswith("wyckoff")}
+    elliott       = {k: float(v) for k, v in advanced.items() if k.startswith("elliott")}
+    sd            = {k: float(v) for k, v in advanced.items() if k.startswith("sd_")}
+    chart_pats    = {k: float(v) for k, v in advanced.items() if k.startswith("chart_")}
 
     # ── Candle Reaction ──────────────────────────────────────
     reaction = compute_candle_reaction(df_1m, smc=smc)
@@ -713,7 +714,7 @@ async def _run_signal_pipeline(
 
     # ── 4-Layer Scoring ──────────────────────────────────────
     mtf_pts    = mtf_score_pts(mtf, direction=direction)
-    smc_pts    = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott, direction=direction)
+    smc_pts    = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott, direction=direction, chart_patterns=chart_pats)
     react_pts  = reaction_score_pts(reaction, direction=direction)
     # Align AI confidence to signal direction before scoring (base_fused is GREEN prob)
     _ai_conf_aligned = base_fused if direction == "GREEN" else (1.0 - base_fused)

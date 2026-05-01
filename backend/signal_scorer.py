@@ -53,6 +53,7 @@ def smc_score_pts(
     sd: dict[str, float],
     elliott: dict[str, float],
     direction: str = "GREEN",
+    chart_patterns: dict[str, float] | None = None,
 ) -> float:
     """SMC/ICT context layer (max ~30 pts, bonuses allowed). Direction-aware."""
     pts = 0.0
@@ -103,6 +104,11 @@ def smc_score_pts(
         pts += 5
     if smc.get("liquidity_swept"):
         pts += 8
+    # Directional sweep: fake sweep of SSL/BSL signals reversal
+    if bull and smc.get("liq_sweep_bull"):
+        pts += 6
+    elif not bull and smc.get("liq_sweep_bear"):
+        pts += 6
 
     # Institutional
     if bull and (inst.get("judas_swing_bull") or inst.get("mm_bull_cycle")):
@@ -144,6 +150,17 @@ def smc_score_pts(
         pts += 7
     elif not bull and elliott.get("elliott_impulse_bear"):
         pts += 7
+
+    # Chart patterns
+    cp = chart_patterns or {}
+    if bull and cp.get("chart_double_bottom"):
+        pts += 8
+    elif not bull and cp.get("chart_double_top"):
+        pts += 8
+    if bull and cp.get("chart_bull_flag"):
+        pts += 5
+    elif not bull and cp.get("chart_bear_flag"):
+        pts += 5
 
     return pts
 

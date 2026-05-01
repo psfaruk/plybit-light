@@ -124,21 +124,36 @@ def compute_smc_features(df: pd.DataFrame, utc_hour: int = 0) -> dict:
     features["fvg_50_level"] = bull_fvgs[0]["mid"] if bull_fvgs else 0
 
     # ── Liquidity ────────────────────────────────────────────
+    atr_val = float((h - l).rolling(14).mean().iloc[-1]) + 1e-10
+    tolerance = atr_val * 0.3  # ATR-relative (avoids % issues on gold vs forex)
+
     recent_highs = h.tail(20)
     recent_lows  = l.tail(20)
-    high_range   = recent_highs.max() - recent_highs.min()
-    low_range    = recent_lows.max()  - recent_lows.min()
+    bsl_level = float(recent_highs.max())
+    ssl_level = float(recent_lows.min())
 
-    equal_highs  = (recent_highs > recent_highs.max() - high_range * 0.05).sum() >= 2
-    equal_lows   = (recent_lows  < recent_lows.min()  + low_range  * 0.05).sum() >= 2
+    equal_highs = (abs(recent_highs - bsl_level) < tolerance).sum() >= 2
+    equal_lows  = (abs(recent_lows  - ssl_level) < tolerance).sum() >= 2
     features["buy_side_liquidity"]  = int(equal_highs)
     features["sell_side_liquidity"] = int(equal_lows)
+    features["bsl_level"] = bsl_level if equal_highs else 0.0
+    features["ssl_level"] = ssl_level if equal_lows  else 0.0
 
-    prev_high = h.iloc[-2]
-    prev_low  = l.iloc[-2]
-    swept_high = c.iloc[-1] < prev_high and h.iloc[-1] > prev_high
-    swept_low  = c.iloc[-1] > prev_low  and l.iloc[-1] < prev_low
-    features["liquidity_swept"] = int(swept_high or swept_low)
+    # Sweep detection: wick-only beyond level, body stays inside → fake sweep
+    prev_h2, prev_l2 = float(h.iloc[-2]), float(l.iloc[-2])
+    prev_c2 = float(c.iloc[-2])
+    bsl_swept = equal_highs and prev_h2 > bsl_level and prev_c2 < bsl_level
+    ssl_swept = equal_lows  and prev_l2 < ssl_level and prev_c2 > ssl_level
+    features["bsl_swept"] = int(bsl_swept)
+    features["ssl_swept"] = int(ssl_swept)
+    # Directional sweep signals: sweep of SSL → expect UP; BSL → expect DOWN
+    features["liq_sweep_bull"] = int(ssl_swept)
+    features["liq_sweep_bear"] = int(bsl_swept)
+
+    # Legacy: any liquidity touched
+    swept_high_leg = float(c.iloc[-1]) < float(h.tail(20).iloc[:-1].max()) and float(h.iloc[-1]) > float(h.tail(20).iloc[:-1].max())
+    swept_low_leg  = float(c.iloc[-1]) > float(l.tail(20).iloc[:-1].min()) and float(l.iloc[-1]) < float(l.tail(20).iloc[:-1].min())
+    features["liquidity_swept"] = int(swept_high_leg or swept_low_leg or bsl_swept or ssl_swept)
 
     # ── Premium / Discount ───────────────────────────────────
     rng_high = h.tail(50).max()
@@ -220,6 +235,9 @@ def _empty_smc() -> dict:
         "price_in_bullish_fvg": 0, "price_in_bearish_fvg": 0,
         "fvg_50_level": 0,
         "buy_side_liquidity": 0, "sell_side_liquidity": 0,
+        "bsl_level": 0.0, "ssl_level": 0.0,
+        "bsl_swept": 0, "ssl_swept": 0,
+        "liq_sweep_bull": 0, "liq_sweep_bear": 0,
         "liquidity_swept": 0,
         "in_premium_zone": 0, "at_equilibrium": 1,
         "in_discount_zone": 0, "in_ote_zone": 0,

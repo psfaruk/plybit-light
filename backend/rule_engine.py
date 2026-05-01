@@ -46,15 +46,13 @@ def rule_engine_predict(
         bear_score += 15 * kz_w
         rules_fired.append("bear_fvg_entry")
 
-    # ── Rule: OTE zone ───────────────────────────────────────
-    if smc.get("in_ote_zone"):
-        trend = smc.get("trend", "range")
-        if trend == "up":
-            bull_score += 10
-            rules_fired.append("ote_bull")
-        elif trend == "down":
-            bear_score += 10
-            rules_fired.append("ote_bear")
+    # ── Rule: OTE zone (direction-aware) ────────────────────
+    if smc.get("in_ote_zone_bull"):
+        bull_score += 10
+        rules_fired.append("ote_bull")
+    if smc.get("in_ote_zone_bear"):
+        bear_score += 10
+        rules_fired.append("ote_bear")
 
     # ── Rule: Liquidity Sweep reversal ───────────────────────
     if inst.get("bullish_liquidity_sweep"):
@@ -97,8 +95,58 @@ def rule_engine_predict(
         bear_score += 10
         rules_fired.append("bear_engulf")
 
+    # ── Rule: Liquidity sweep reversal (directional fake sweep) ──
+    if smc.get("liq_sweep_bull"):
+        bull_score += 20 * kz_w
+        rules_fired.append("liq_sweep_bull")
+    if smc.get("liq_sweep_bear"):
+        bear_score += 20 * kz_w
+        rules_fired.append("liq_sweep_bear")
+
+    # ── Rule: PD Array — multiple confluences at entry zone ──
+    pd_bull = (
+        int(bool(smc.get("price_at_bullish_ob")))   * 3 +
+        int(bool(smc.get("price_in_bullish_fvg")))  * 2 +
+        int(bool(smc.get("ssl_swept") or inst.get("bullish_liquidity_sweep"))) * 3 +
+        int(bool(smc.get("in_ote_zone_bull")))      * 2 +
+        int(bool(smc.get("in_discount_zone")))      * 1 +
+        int(bool(smc.get("bullish_choch")))         * 2
+    )
+    pd_bear = (
+        int(bool(smc.get("price_at_bearish_ob")))   * 3 +
+        int(bool(smc.get("price_in_bearish_fvg")))  * 2 +
+        int(bool(smc.get("bsl_swept") or inst.get("bearish_liquidity_sweep"))) * 3 +
+        int(bool(smc.get("in_ote_zone_bear")))      * 2 +
+        int(bool(smc.get("in_premium_zone")))       * 1 +
+        int(bool(smc.get("bearish_choch")))         * 2
+    )
+    if pd_bull >= 5:
+        bull_score += pd_bull * 2 * kz_w
+        rules_fired.append(f"pd_array_bull_{pd_bull}")
+    if pd_bear >= 5:
+        bear_score += pd_bear * 2 * kz_w
+        rules_fired.append(f"pd_array_bear_{pd_bear}")
+
+    # ── Rule: SMC full setup (sweep + ChoCh + OB/FVG) ────────
+    smc_full_bull = (
+        (smc.get("ssl_swept") or inst.get("bullish_liquidity_sweep")) and
+        smc.get("bullish_choch") and
+        (smc.get("price_at_bullish_ob") or smc.get("price_in_bullish_fvg"))
+    )
+    smc_full_bear = (
+        (smc.get("bsl_swept") or inst.get("bearish_liquidity_sweep")) and
+        smc.get("bearish_choch") and
+        (smc.get("price_at_bearish_ob") or smc.get("price_in_bearish_fvg"))
+    )
+    if smc_full_bull:
+        bull_score += 35 * kz_w
+        rules_fired.append("smc_full_bull")
+    if smc_full_bear:
+        bear_score += 35 * kz_w
+        rules_fired.append("smc_full_bear")
+
     # ── Normalize to confidence ───────────────────────────────
-    max_possible = 90.0
+    max_possible = 160.0
     if bull_score > bear_score and bull_score > 15:
         confidence = min(0.50 + (bull_score / max_possible) * 0.45, 0.95)
         return {"direction": "GREEN", "confidence": confidence, "rules_fired": rules_fired}

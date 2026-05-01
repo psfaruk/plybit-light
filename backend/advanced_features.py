@@ -157,8 +157,66 @@ def _sd_keys() -> list[str]:
     ]
 
 
+def detect_chart_patterns(df: pd.DataFrame) -> dict[str, float]:
+    """Classic chart patterns: Double Top/Bottom, Bull/Bear Flag, Consolidation."""
+    if len(df) < 20:
+        return {k: 0.0 for k in _pattern_keys()}
+
+    h, l, c = df["high"], df["low"], df["close"]
+    atr = float((h - l).rolling(14).mean().iloc[-1]) + 1e-10
+    price = float(c.iloc[-1])
+    patterns: dict[str, float] = {k: 0.0 for k in _pattern_keys()}
+
+    # ── Double Top (Bearish Reversal) ────────────────────────
+    if len(df) >= 15:
+        tops = [float(h.iloc[-(i * 5)]) for i in range(1, 4) if i * 5 < len(df)]
+        if len(tops) >= 2 and abs(tops[0] - tops[1]) < atr * 0.8:
+            neckline = min(tops[0], tops[1]) - atr
+            if price < neckline:
+                patterns["chart_double_top"] = 1.0
+
+    # ── Double Bottom (Bullish Reversal) ─────────────────────
+    if len(df) >= 15:
+        bots = [float(l.iloc[-(i * 5)]) for i in range(1, 4) if i * 5 < len(df)]
+        if len(bots) >= 2 and abs(bots[0] - bots[1]) < atr * 0.8:
+            neckline = max(bots[0], bots[1]) + atr
+            if price > neckline:
+                patterns["chart_double_bottom"] = 1.0
+
+    # ── Bull Flag (Continuation UP after strong move) ────────
+    if len(df) >= 15:
+        move_up  = float(c.iloc[-10]) - float(c.iloc[-15])
+        pullback = float(c.iloc[-1])  - float(c.iloc[-10])
+        if move_up > atr * 2.0 and -atr * 1.5 < pullback < 0:
+            patterns["chart_bull_flag"] = 1.0
+
+    # ── Bear Flag (Continuation DOWN after strong move) ──────
+    if len(df) >= 15:
+        move_dn  = float(c.iloc[-15]) - float(c.iloc[-10])
+        pullback = float(c.iloc[-10]) - float(c.iloc[-1])
+        if move_dn > atr * 2.0 and -atr * 1.5 < pullback < 0:
+            patterns["chart_bear_flag"] = 1.0
+
+    # ── Tight Consolidation (breakout imminent) ───────────────
+    last_20_range = float(h.tail(20).max() - l.tail(20).min())
+    last_5_range  = float(h.tail(5).max()  - l.tail(5).min())
+    if last_20_range > 0 and last_5_range < last_20_range * 0.25:
+        patterns["chart_consolidation"] = 1.0
+
+    return patterns
+
+
+def _pattern_keys() -> list[str]:
+    return [
+        "chart_double_top", "chart_double_bottom",
+        "chart_bull_flag", "chart_bear_flag",
+        "chart_consolidation",
+    ]
+
+
 def compute_all_advanced(df: pd.DataFrame) -> dict[str, float]:
     out: dict[str, float] = {}
-    for d in [compute_wyckoff(df), compute_elliott_wave(df), compute_supply_demand(df)]:
+    for d in [compute_wyckoff(df), compute_elliott_wave(df),
+              compute_supply_demand(df), detect_chart_patterns(df)]:
         out.update({k: float(v) for k, v in d.items()})
     return out
