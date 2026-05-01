@@ -5,7 +5,7 @@ Plan layers (Master Plan v6.0):
   Layer 2 — SMC/ICT context      max 30 pts (+ bonuses)
   Layer 3 — Candle Reaction      max 25 pts (+ bonuses)
   Layer 4 — AI Ensemble          max 30 pts (+ bonus)
-  FINAL = total / 160 (per plan, leaves headroom for bonuses)
+  FINAL = total / 130 (bonuses push above 1.0 before clamp)
 """
 
 from config import GRADE_ELITE, GRADE_HIGH, GRADE_MODERATE
@@ -23,7 +23,7 @@ def score_to_confidence(
 ) -> float:
     """Combine 4 scoring layers into a final confidence [0, 1]."""
     raw_total = mtf_pts + smc_pts + reaction_pts + ai_pts
-    max_pts   = 160.0  # per plan v6.0 (was 130 — allows bonus headroom)
+    max_pts   = 130.0  # baseline sum of all 4 layers; bonuses push above
 
     confidence = raw_total / max_pts
 
@@ -35,11 +35,8 @@ def score_to_confidence(
     if adx < 15:
         confidence *= 0.75
 
-    # Kalman noise filter — uses ABS velocity (negative trend has |vel|>0)
-    if abs(kalman_vel) < 1e-5:
-        confidence *= 0.70
-
-    # Kalman trend agreement
+    # Kalman trend agreement (velocity penalty removed — threshold 1e-5 is
+    # sub-pip scale and fires on every forex signal in quiet markets)
     if kalman_agree:
         confidence += 0.02
     else:

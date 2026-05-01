@@ -715,7 +715,9 @@ async def _run_signal_pipeline(
     mtf_pts    = mtf_score_pts(mtf, direction=direction)
     smc_pts    = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott, direction=direction)
     react_pts  = reaction_score_pts(reaction, direction=direction)
-    ai_pts_val = ai_score_pts(base_fused, meta_prob)
+    # Align AI confidence to signal direction before scoring (base_fused is GREEN prob)
+    _ai_conf_aligned = base_fused if direction == "GREEN" else (1.0 - base_fused)
+    ai_pts_val = ai_score_pts(_ai_conf_aligned, meta_prob)
 
     confidence = score_to_confidence(
         mtf_pts, smc_pts, react_pts, ai_pts_val,
