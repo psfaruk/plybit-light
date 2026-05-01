@@ -19,12 +19,20 @@ export interface Signal {
   patterns:    string[];
   ai_models:   Record<string, number>;
   candle_reaction: {
-    bull_score: number;
-    bear_score: number;
-    net_score:  number;
-    pin_bar?:   number;
-    engulfing?: number;
+    bull_score:   number;
+    bear_score:   number;
+    net_score:    number;
+    pin_bar?:     number;
+    pin_bull?:    number;
+    pin_bear?:    number;
+    engulfing?:   number;
+    bull_engulf?: number;
+    bear_engulf?: number;
+    atr_score?:   number;
+    close_pos?:   number;
   };
+  candle_open_time?:  number;
+  candle_close_time?: number;
   mtf_context: {
     direction:  string;
     agreement:  number;

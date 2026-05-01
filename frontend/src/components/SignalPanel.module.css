@@ -231,3 +231,125 @@
   font-weight: 600;
   font-size: 10px;
 }
+.modelChipDim {
+  opacity: 0.45;
+}
+.modelChipScanning {
+  animation: chip-fade-in 0.4s ease both;
+}
+.modelDotPulse {
+  background: var(--blue-neon) !important;
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+
+/* Waiting panel */
+.waitingPanel {
+  overflow-y: auto;
+}
+.waitSection {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) 0;
+}
+.scanRing {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--blue-neon);
+  border-top-color: transparent;
+  animation: spin 1s linear infinite;
+}
+.waitHeading {
+  font-family: var(--font-display);
+  font-size:   11px;
+  letter-spacing: 1.5px;
+  color:       var(--white-soft);
+  text-align:  center;
+}
+.blockBadge {
+  font-size:    10px;
+  color:        var(--orange-neon);
+  text-align:   center;
+  padding:      3px 8px;
+  background:   rgba(255,160,40,0.08);
+  border-radius: var(--radius-sm);
+}
+
+/* Scoring layers */
+.layersGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.layerRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.layerLabel {
+  font-family: var(--font-data);
+  font-size:   10px;
+  color:       var(--muted);
+  width:       36px;
+  flex-shrink: 0;
+}
+.layerBar {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-elevated);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.layerPts {
+  font-family: var(--font-data);
+  font-size:   10px;
+  width:       36px;
+  text-align:  right;
+  flex-shrink: 0;
+}
+
+/* SMC context */
+.smcChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.smcChip {
+  font-size:     9px;
+  font-family:   var(--font-display);
+  letter-spacing: 0.5px;
+  padding:       2px 7px;
+  border-radius: var(--radius-sm);
+}
+.smcEmpty {
+  font-size: 10px;
+  color:     var(--muted);
+  font-style: italic;
+}
+.smcNet {
+  font-family: var(--font-data);
+  font-size:   10px;
+  color:       var(--muted);
+  margin-top:  3px;
+}
+
+/* MTF agreement */
+.mtfAgreement {
+  font-family: var(--font-data);
+  font-size:   10px;
+  color:       var(--muted);
+}
+
+@keyframes dot-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50%       { opacity: 1;   transform: scale(1.2); }
+}
+@keyframes chip-fade-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

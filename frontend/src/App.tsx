@@ -25,7 +25,7 @@ export function App() {
       <header className={styles.header}>
         <div className={styles.logo}>
           <span className={styles.logoIcon}>⚡</span>
-          <span className={styles.logoText}>PLAYBIT AI</span>
+          <span className={styles.logoText}>Plybit Ai Signals</span>
         </div>
 
         <div className={styles.headerCenter}>
