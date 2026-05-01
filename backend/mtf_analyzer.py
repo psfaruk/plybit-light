@@ -115,19 +115,24 @@ def compute_mtf_agreement(
     }
 
 
-def mtf_score_pts(mtf: dict[str, object]) -> float:
-    """Convert MTF result to scoring layer points (max 45)."""
+def mtf_score_pts(mtf: dict[str, object], direction: str = "GREEN") -> float:
+    """Convert MTF result to scoring layer points (max 45).
+
+    Points awarded only when each TF bias aligns with the SIGNAL direction
+    (bull → GREEN, bear → RED), not just internal MTF consensus.
+    """
     pts = 0.0
     tfs = mtf.get("tfs", {})
+    aligned_bias = "bull" if direction == "GREEN" else "bear"
 
     if isinstance(tfs, dict):
-        if isinstance(tfs.get("1h"), dict) and tfs["1h"].get("bias") == mtf.get("direction"):  # type: ignore[union-attr]
+        if isinstance(tfs.get("1h"),  dict) and tfs["1h"].get("bias")  == aligned_bias:  # type: ignore[union-attr]
             pts += 12
-        if isinstance(tfs.get("15m"), dict) and tfs["15m"].get("bias") == mtf.get("direction"):  # type: ignore[union-attr]
+        if isinstance(tfs.get("15m"), dict) and tfs["15m"].get("bias") == aligned_bias:  # type: ignore[union-attr]
             pts += 10
-        if isinstance(tfs.get("5m"), dict) and tfs["5m"].get("bias") == mtf.get("direction"):  # type: ignore[union-attr]
+        if isinstance(tfs.get("5m"),  dict) and tfs["5m"].get("bias")  == aligned_bias:  # type: ignore[union-attr]
             pts += 10
-        if isinstance(tfs.get("2m"), dict) and tfs["2m"].get("bias") == mtf.get("direction"):  # type: ignore[union-attr]
+        if isinstance(tfs.get("2m"),  dict) and tfs["2m"].get("bias")  == aligned_bias:  # type: ignore[union-attr]
             pts += 8
 
     if mtf.get("in_killzone"):

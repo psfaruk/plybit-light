@@ -31,9 +31,9 @@ def score_to_confidence(
     if meta_pass:
         confidence += 0.04
 
-    # Choppy market penalty
+    # ADX choppy-market penalty applied once here (main.py adds NO second pass)
     if adx < 15:
-        confidence *= 0.55
+        confidence *= 0.75
 
     # Kalman noise filter — uses ABS velocity (negative trend has |vel|>0)
     if abs(kalman_vel) < 1e-5:
@@ -151,24 +151,30 @@ def smc_score_pts(
     return pts
 
 
-def reaction_score_pts(reaction: dict[str, float]) -> float:
-    """Candle reaction layer (max 25 + bonuses)."""
+def reaction_score_pts(reaction: dict[str, float], direction: str = "GREEN") -> float:
+    """Candle reaction layer (max 25 + bonuses). Direction-aware."""
     net = float(reaction.get("net_score", 0))
-    if net > 60:
+    # For RED signals, negate net so bearish reaction scores positively
+    aligned_net = net if direction == "GREEN" else -net
+
+    if aligned_net > 60:
         pts = 25.0
-    elif net > 40:
+    elif aligned_net > 40:
         pts = 20.0
-    elif net > 20:
+    elif aligned_net > 20:
         pts = 14.0
-    elif net > 0:
+    elif aligned_net > 0:
         pts = 8.0
     else:
         pts = 0.0
 
-    if reaction.get("pin_bar"):
-        pts += 5
-    if reaction.get("engulfing"):
-        pts += 6
+    # Direction-specific pattern bonuses
+    if direction == "GREEN":
+        if reaction.get("pin_bull"):   pts += 5
+        if reaction.get("bull_engulf"): pts += 6
+    else:
+        if reaction.get("pin_bear"):   pts += 5
+        if reaction.get("bear_engulf"): pts += 6
 
     return pts
 

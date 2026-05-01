@@ -81,26 +81,27 @@ def compute_candle_reaction(
     bull_engulf_score = 95.0 if bull_engulf else 0.0
     bear_engulf_score = 95.0 if bear_engulf else 0.0
 
-    # Bug 6.1 fix: zone reaction uses SMC context when available
-    zone_score = 0.0
+    # Zone reaction — directional: only adds to the aligned side
+    bull_zone_score = 0.0
+    bear_zone_score = 0.0
     if smc:
         candle_mid = (h + l) / 2.0
         at_bull = smc.get("price_in_bullish_fvg") or smc.get("price_at_bullish_ob")
         at_bear = smc.get("price_in_bearish_fvg") or smc.get("price_at_bearish_ob")
         if at_bull and c > candle_mid:
-            zone_score = 90.0
+            bull_zone_score = 90.0  # close above mid at bullish zone → bull confirmation
         elif at_bear and c < candle_mid:
-            zone_score = 90.0
+            bear_zone_score = 90.0  # close below mid at bearish zone → bear confirmation
 
     # Weighted composite
     weights = [0.20, 0.18, 0.18, 0.15, 0.10, 0.14, 0.05]
     bull_components = [
         bull_wick_score, pin_bull_score, bull_body_score,
-        bull_mom_score, atr_score, bull_engulf_score, zone_score,
+        bull_mom_score, atr_score, bull_engulf_score, bull_zone_score,
     ]
     bear_components = [
         bear_wick_score, pin_bear_score, bear_body_score,
-        bear_mom_score, atr_score, bear_engulf_score, zone_score,
+        bear_mom_score, atr_score, bear_engulf_score, bear_zone_score,
     ]
 
     bull_score = float(sum(w * s for w, s in zip(weights, bull_components)))

@@ -670,9 +670,9 @@ async def _run_signal_pipeline(
     meta_prob = meta.predict(feat) if meta else 0.75
 
     # ── 4-Layer Scoring ──────────────────────────────────────
-    mtf_pts    = mtf_score_pts(mtf)
+    mtf_pts    = mtf_score_pts(mtf, direction=direction)
     smc_pts    = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott, direction=direction)
-    react_pts  = reaction_score_pts(reaction)
+    react_pts  = reaction_score_pts(reaction, direction=direction)
     ai_pts_val = ai_score_pts(base_fused, meta_prob)
 
     confidence = score_to_confidence(
@@ -724,8 +724,7 @@ async def _run_signal_pipeline(
         confidence *= 0.88
     if cons_score < config.SIGNAL_MIN_EMIT_CONFIRM:
         confidence *= 0.92
-    if adx < 15:
-        confidence *= 0.85  # choppy market
+    # Note: ADX < 15 already penalised inside score_to_confidence; no second pass here.
 
     # ATR-spike (volatility): current candle range > 3× rolling ATR
     if len(df_1m) >= 21:
