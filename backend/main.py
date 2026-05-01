@@ -153,9 +153,10 @@ async def load_history_for_pair(pair: str) -> None:
                 # Push 1M history to already-connected clients
                 if granularity == 60:
                     await broadcast({
-                        "type":    "history",
-                        "pair":    pair,
-                        "candles": candles,   # send ALL loaded candles
+                        "type":        "history",
+                        "pair":        pair,
+                        "granularity": 60,
+                        "candles":     candles,
                     })
                     if len(candles) >= config.MIN_CANDLES:
                         asyncio.create_task(train_models_for_pair(pair))
@@ -388,7 +389,7 @@ async def on_candle(pair: str, granularity: int, candle: dict[str, Any]) -> None
     last_t    = _last_live_broadcast.get(pair, 0.0)
     if is_closed or (now_t - last_t) >= _LIVE_BROADCAST_INTERVAL:
         await broadcast({
-            "type":        "candle_update",
+            "type":        "candle_closed" if is_closed else "candle_update",
             "pair":        pair,
             "granularity": granularity,
             "candle":      candle,
@@ -819,9 +820,10 @@ async def websocket_endpoint(ws: WebSocket, pair: str) -> None:
         candles = candle_store.get(pair, {}).get(60, [])
         if candles:
             await ws.send_json({
-                "type":    "history",
-                "pair":    pair,
-                "candles": candles,   # send all stored candles on connect
+                "type":        "history",
+                "pair":        pair,
+                "granularity": 60,
+                "candles":     candles,
             })
 
         # Send model status — fall back to candle-store count when no

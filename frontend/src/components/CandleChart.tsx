@@ -21,7 +21,8 @@ export function CandleChart() {
   const ema5Ref  = useRef<ISeriesApi<"Line"> | null>(null);
   const ema20Ref = useRef<ISeriesApi<"Line"> | null>(null);
 
-  const lastFullKeyRef = useRef<string>("");
+  const lastDatasetKeyRef = useRef<string>("");
+  const prevCandleLenRef  = useRef<number>(0);
 
   const { candles, activeTf, activePair, signal, markers, addMarker, pruneMarkers } = useStore();
   const isLoading = (candles[activeTf] ?? []).length === 0;
@@ -109,7 +110,7 @@ export function CandleChart() {
     try { series.setMarkers(seriesMarkers); } catch { /* ignore */ }
   }, [markers, activePair, activeTf]);
 
-  // Update candles — incremental
+  // Update candles — incremental: setData only on dataset change, update() for ticks/new candles
   useEffect(() => {
     const raw = candles[activeTf] ?? [];
     if (!candleSeriesRef.current || raw.length === 0) return;
@@ -118,11 +119,30 @@ export function CandleChart() {
     for (const c of raw) byEpoch.set(c.epoch, c);
     const cs = Array.from(byEpoch.values()).sort((a, b) => a.epoch - b.epoch);
 
-    const last     = cs[cs.length - 1];
-    const fullKey  = `${activePair}:${activeTf}:${cs.length}`;
-    const isNewSet = fullKey !== lastFullKeyRef.current;
+    const last       = cs[cs.length - 1];
+    const firstEpoch = cs[0].epoch;
+    // Key changes only on pair/TF switch or history replacement (first-epoch shifts)
+    const datasetKey    = `${activePair}:${activeTf}:${firstEpoch}`;
+    const isNewDataset  = datasetKey !== lastDatasetKeyRef.current;
+    const isNewCandle   = cs.length > prevCandleLenRef.current;
+    prevCandleLenRef.current = cs.length;
 
-    if (isNewSet) {
+    const updateEMAs = () => {
+      if (cs.length < 20) return;
+      const closes = cs.map((c) => c.close);
+      const ema5d  = calcEMA(closes, 5);
+      const ema20d = calcEMA(closes, 20);
+      ema5Ref.current?.setData(
+        cs.map((c, i) => ({ time: c.epoch as unknown as Time, value: ema5d[i] ?? 0 }))
+          .filter((d) => d.value !== 0),
+      );
+      ema20Ref.current?.setData(
+        cs.map((c, i) => ({ time: c.epoch as unknown as Time, value: ema20d[i] ?? 0 }))
+          .filter((d) => d.value !== 0),
+      );
+    };
+
+    if (isNewDataset) {
       const data = cs.map((c) => ({
         time:  c.epoch as unknown as Time,
         open:  c.open,
@@ -132,26 +152,10 @@ export function CandleChart() {
       }));
       try { candleSeriesRef.current.setData(data); }
       catch (e) { console.warn("Chart setData failed:", e); return; }
-      lastFullKeyRef.current = fullKey;
-
-      if (cs.length >= 20) {
-        const closes = cs.map((c) => c.close);
-        const ema5d  = calcEMA(closes, 5);
-        const ema20d = calcEMA(closes, 20);
-        ema5Ref.current?.setData(
-          cs.map((c, i) => ({
-            time:  c.epoch as unknown as Time,
-            value: ema5d[i] ?? 0,
-          })).filter((d) => d.value !== 0)
-        );
-        ema20Ref.current?.setData(
-          cs.map((c, i) => ({
-            time:  c.epoch as unknown as Time,
-            value: ema20d[i] ?? 0,
-          })).filter((d) => d.value !== 0)
-        );
-      }
+      lastDatasetKeyRef.current = datasetKey;
+      updateEMAs();
     } else {
+      // Incremental: covers tick updates AND new-candle additions
       try {
         candleSeriesRef.current.update({
           time:  last.epoch as unknown as Time,
@@ -161,6 +165,7 @@ export function CandleChart() {
           close: last.close,
         });
       } catch {/* ignore */}
+      if (isNewCandle) updateEMAs();
     }
 
   }, [candles, activeTf, activePair]);
@@ -170,17 +175,20 @@ export function CandleChart() {
     chartRef.current?.timeScale().scrollToRealTime();
   }, [activePair, activeTf]);
 
-  // When a signal arrives, persist a marker (also handled in useWebSocket
-  // for other pairs; this is the active-pair fallback)
+  // When a signal arrives, add a marker for the ACTIVE TF.
+  // useWebSocket handles tf=60 for all pairs; this covers non-1M TFs.
   useEffect(() => {
     if (!signal || signal.signal === "SKIP") return;
-    const cs = candles[activeTf] ?? [];
-    if (!cs.length) return;
-    const last = cs[cs.length - 1];
+    const openTime = (signal as unknown as Record<string, unknown>).candle_open_time as number | undefined;
+    if (!openTime) return;
+    // 1M: arrow on next candle (trade entry). Higher TF: floor to TF bucket.
+    const epoch = activeTf === 60
+      ? openTime + 60
+      : Math.floor(openTime / activeTf) * activeTf;
     addMarker({
       pair:       activePair,
       tf:         activeTf,
-      epoch:      last.epoch,
+      epoch,
       direction:  signal.signal,
       grade:      signal.grade,
       confidence: signal.confidence,
