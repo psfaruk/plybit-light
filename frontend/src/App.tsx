@@ -11,6 +11,8 @@ import { ModelGrid }                from "./components/ModelGrid";
 import { PairSelector, formatPair } from "./components/PairSelector";
 import { TimeframeSelector }        from "./components/TimeframeSelector";
 import { WindowPanel }              from "./components/WindowPanel";
+import { SmcPanel }                 from "./components/SmcPanel";
+import { ReactionPanel }            from "./components/ReactionPanel";
 import { TickerBar }                from "./components/TickerBar";
 
 export function App() {
@@ -63,6 +65,12 @@ export function App() {
           </div>
           <div className={styles.windowWrap}>
             <WindowPanel />
+          </div>
+          <div className={styles.smcWrap}>
+            <SmcPanel />
+          </div>
+          <div className={styles.reactionWrap}>
+            <ReactionPanel />
           </div>
           <div className={styles.modelWrap}>
             <ModelGrid />

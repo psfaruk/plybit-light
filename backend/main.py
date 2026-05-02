@@ -39,6 +39,7 @@ from stacking_model import StackingEnsemble
 from telegram_bot import send_signal_alert
 from timing_engine import aggregate_samples
 from window_selector import WindowSelector
+from signal_history import SignalHistory
 
 import deriv as deriv_client
 from tick_store import tick_store
@@ -73,6 +74,9 @@ window_selectors:dict[str, WindowSelector]   = {}
 
 # circuit breaker: consecutive losses per pair
 loss_streak:     dict[str, int]              = {}
+
+# signal history tracker
+signal_history = SignalHistory(max_records=500)
 
 # last broadcast signal per pair — surfaced via /api/signal/{pair}
 last_signal_per_pair: dict[str, dict[str, Any]] = {}
@@ -541,6 +545,19 @@ async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
     signal["candle_open_time"]  = epoch
     signal["candle_close_time"] = epoch + 60
     signal["timestamp"]         = time.time()
+    signal["signal_id"]         = f"{pair}_{epoch}"
+
+    # Auto-expire old pending signals, then record new one
+    signal_history.auto_settle_expired(pair, epoch)
+    signal_history.add(
+        signal_id=signal["signal_id"],
+        pair=pair,
+        direction=str(signal["signal"]),
+        confidence=float(signal["confidence"]),
+        grade=str(signal["grade"]),
+        epoch=epoch,
+        utc_hour=utc_hour,
+    )
 
     last_signal_per_pair[pair] = {**signal, "pair": pair}
 
@@ -757,29 +774,27 @@ async def _run_signal_pipeline(
     _opposing_h1  = (direction == "GREEN" and _h1_bias  == "bear") or (direction == "RED" and _h1_bias  == "bull")
     _opposing_m15 = (direction == "GREEN" and _m15_bias == "bear") or (direction == "RED" and _m15_bias == "bull")
     if _opposing_h1 and _opposing_m15:
-        confidence *= 0.60   # both senior TFs oppose — strong block
+        confidence *= 0.72   # both senior TFs oppose — moderate block
     elif _opposing_h1 or _opposing_m15:
-        confidence *= 0.80   # one senior TF opposes — moderate penalty
+        confidence *= 0.85   # one senior TF opposes — soft penalty
     elif mtf_dir_str != "neutral":
         if (direction == "GREEN" and mtf_dir_str == "bear") or \
            (direction == "RED"   and mtf_dir_str == "bull"):
-            confidence *= 0.88  # only lower TFs oppose — mild penalty
+            confidence *= 0.93  # only lower TFs oppose — mild penalty
 
     # Majority-vote gate: if ≥60% of all models oppose direction, penalise
     _all_probs = list(all_model_probs.values())
     if _all_probs:
         _oppose_count = sum(1 for p in _all_probs if (direction == "GREEN" and p < 0.50) or (direction == "RED" and p > 0.50))
         if _oppose_count / len(_all_probs) >= 0.60:
-            confidence *= 0.75
+            confidence *= 0.85
 
     if mtf_agreement < config.MTF_MIN_AGREEMENT:
-        confidence *= 0.92
+        confidence *= 0.97
     if ppo_skip:
-        confidence *= 0.85
+        confidence *= 0.96
     if meta_prob < 0.60:
-        confidence *= 0.88
-    if cons_score < config.SIGNAL_MIN_EMIT_CONFIRM:
-        confidence *= 0.92
+        confidence *= 0.97
     # Note: ADX < 15 already penalised inside score_to_confidence; no second pass here.
 
     # ATR-spike: large candle = institutional move already in progress.
@@ -819,6 +834,8 @@ async def _run_signal_pipeline(
         "hard_confirmed":   cons_score >= config.SIGNAL_CONFIRM_REQUIRED,
         "mtf_context":      mtf,
         "smc_context":      smc,
+        "institutional":    inst,
+        "wyckoff":          wyckoff,
         "candle_reaction":  reaction,
         "patterns":         pattern_names,
         "ai_models":        all_model_probs,
@@ -1019,6 +1036,23 @@ async def report_result(pair: str, won: bool) -> dict[str, Any]:
     else:
         loss_streak[pair] = loss_streak.get(pair, 0) + 1
     return {"pair": pair, "streak": loss_streak.get(pair, 0)}
+
+
+@app.post("/api/result/{signal_id}/settle")
+async def settle_signal(signal_id: str, outcome: str) -> dict[str, Any]:
+    """Settle a specific signal: outcome = WIN | LOSS | EXPIRED."""
+    ok = signal_history.settle(signal_id, outcome.upper())
+    return {"signal_id": signal_id, "outcome": outcome.upper(), "found": ok}
+
+
+@app.get("/api/signal-history/{pair}")
+async def get_signal_history(pair: str, limit: int = 50) -> dict[str, Any]:
+    return {"pair": pair, "records": signal_history.get_records(pair, limit=limit)}
+
+
+@app.get("/api/stats/{pair}")
+async def get_pair_stats(pair: str) -> dict[str, Any]:
+    return signal_history.get_stats(pair)
 
 
 # ── Helpers ──────────────────────────────────────────────────

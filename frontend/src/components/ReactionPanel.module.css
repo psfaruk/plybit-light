@@ -1,0 +1,110 @@
+.panel {
+  display:        flex;
+  flex-direction: column;
+  gap:            var(--sp-2);
+  background:     var(--bg-glass);
+  backdrop-filter:blur(20px);
+  border:         1px solid rgba(255,255,255,0.06);
+  border-radius:  var(--radius-md);
+  padding:        var(--sp-3) var(--sp-4);
+}
+
+.sectionHeader {
+  font-family:    var(--font-display);
+  font-size:      9px;
+  letter-spacing: 2px;
+  color:          var(--muted);
+  margin-top:     var(--sp-2);
+  margin-bottom:  2px;
+}
+.sectionHeader:first-child { margin-top: 0; }
+
+/* Score bars */
+.scoreRow {
+  display:     flex;
+  flex-wrap:   wrap;
+  align-items: center;
+  gap:         var(--sp-2);
+}
+.scoreItem {
+  display:     flex;
+  align-items: center;
+  gap:         var(--sp-2);
+  flex:        1;
+  min-width:   100px;
+}
+.scoreLabel {
+  font-family: var(--font-data);
+  font-size:   10px;
+  color:       var(--muted);
+  width:       26px;
+  flex-shrink: 0;
+}
+.scoreBar {
+  flex:          1;
+  height:        5px;
+  background:    var(--bg-elevated);
+  border-radius: 3px;
+  overflow:      hidden;
+}
+.scoreFill {
+  height:        100%;
+  border-radius: 3px;
+  transition:    width 0.5s ease;
+  width:         var(--score-pct, 0%);
+}
+.scoreFill[data-side="bull"] { background: var(--green-neon); opacity: 0.75; }
+.scoreFill[data-side="bear"] { background: var(--red-neon);   opacity: 0.75; }
+
+.scoreVal {
+  font-family: var(--font-data);
+  font-size:   10px;
+  width:       22px;
+  text-align:  right;
+}
+.scoreVal[data-side="bull"] { color: var(--green-neon); }
+.scoreVal[data-side="bear"] { color: var(--red-neon);   }
+
+.netBadge {
+  font-family:  var(--font-data);
+  font-size:    10px;
+  padding:      2px 6px;
+  border-radius:4px;
+  border:       1px solid rgba(255,255,255,0.08);
+  color:        var(--muted);
+}
+.netBadge[data-positive="true"] {
+  color:        var(--green-neon);
+  border-color: rgba(0,255,136,0.25);
+  background:   rgba(0,255,136,0.06);
+}
+
+/* Chip row */
+.chipRow {
+  display:   flex;
+  flex-wrap: wrap;
+  gap:       4px;
+}
+.chip {
+  font-family:  var(--font-data);
+  font-size:    9px;
+  padding:      2px 7px;
+  border-radius:4px;
+  border:       1px solid rgba(255,255,255,0.06);
+  background:   rgba(255,255,255,0.03);
+}
+.chip[data-side="bull"] {
+  color:        var(--green-neon);
+  background:   rgba(0,255,136,0.07);
+  border-color: rgba(0,255,136,0.2);
+}
+.chip[data-side="bear"] {
+  color:        var(--red-neon);
+  background:   rgba(255,59,59,0.07);
+  border-color: rgba(255,59,59,0.2);
+}
+.chip[data-side="neutral"] {
+  color:        var(--cyan-neon);
+  background:   rgba(0,245,255,0.06);
+  border-color: rgba(0,245,255,0.18);
+}

@@ -105,9 +105,11 @@
   background:    var(--bg-base);
   min-height:    0;
 }
-.signalWrap { flex-shrink: 0; }
-.windowWrap { flex-shrink: 0; }
-.modelWrap  { flex: 1; min-height: 0; overflow: hidden; }
+.signalWrap   { flex-shrink: 0; }
+.windowWrap   { flex-shrink: 0; }
+.smcWrap      { flex-shrink: 0; }
+.reactionWrap { flex-shrink: 0; }
+.modelWrap    { flex: 1; min-height: 0; overflow: hidden; }
 
 /* Tablet — narrower right column */
 @media (max-width: 1024px) {

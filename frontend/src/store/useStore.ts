@@ -40,7 +40,9 @@ export interface Signal {
     in_killzone:boolean;
     tfs:        Record<string, { bias: string; strength: number }>;
   };
-  smc_context: Record<string, unknown>;
+  smc_context:        Record<string, unknown>;
+  institutional?:     Record<string, unknown>;
+  wyckoff?:           Record<string, unknown>;
   bayes_uncertainty?: { bayes_mean: number; bayes_std: number };
   layers?: { mtf_pts: number; smc_pts: number; react_pts: number; ai_pts: number };
   window_plan?: Array<{ epoch: number; confidence: number; direction: string; grade: string }>;

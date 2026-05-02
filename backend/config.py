@@ -77,7 +77,7 @@ MIN_WINDOW_POSITION    = int(os.getenv("MIN_WINDOW_POSITION", "0"))
 # ── MTF Analysis ─────────────────────────────────────────────────────
 MTF_ANALYSIS_TFS  = [3600, 900, 300, 120]
 MTF_SIGNAL_TF     = 60
-MTF_MIN_AGREEMENT = 0.60   # plan §9: < 60% → block
+MTF_MIN_AGREEMENT = 0.40   # plan §9: < 40% → soft penalty
 MTF_WEIGHTS       = {"1h": 0.35, "15m": 0.28, "5m": 0.22, "2m": 0.15}
 
 # ── App Timeframes ────────────────────────────────────────────────────
@@ -87,11 +87,11 @@ APP_TF_SECONDARY = [120, 3600, 14400]
 # ── Signal Quality ─────────────────────────────────────────────────────
 GRADE_ELITE    = float(os.getenv("GRADE_ELITE", "0.82"))  # 👑
 GRADE_HIGH     = float(os.getenv("GRADE_HIGH", "0.75"))   # ✅
-GRADE_MODERATE = float(os.getenv("GRADE_MODERATE", "0.60"))  # ⚡
+GRADE_MODERATE = float(os.getenv("GRADE_MODERATE", "0.45"))  # ⚡
 TELEGRAM_MIN_GRADE      = os.getenv("TELEGRAM_MIN_GRADE", "HIGH").upper()
 SIGNAL_THRESHOLD        = float(os.getenv("SIGNAL_THRESHOLD", str(GRADE_MODERATE)))
 SIGNAL_CONFIRM_REQUIRED = 8
-SIGNAL_MIN_EMIT_CONFIRM = 6
+SIGNAL_MIN_EMIT_CONFIRM = int(os.getenv("SIGNAL_MIN_EMIT_CONFIRM", "3"))
 
 # ── Gold ───────────────────────────────────────────────────────────────────
 GOLD_ATR_MULTIPLIER = 1.5

@@ -60,10 +60,22 @@ class WindowSelector:
         if confidence < GRADE_MODERATE:
             return False
 
-        if len(self._window_signals) >= MAX_SIGNALS_PER_WINDOW:
-            return False
-
         score = compute_candle_score(mtf_agreement, pos_idx, reaction_net, confidence)
+
+        if len(self._window_signals) >= MAX_SIGNALS_PER_WINDOW:
+            # Replace lowest-score signal if new one is better
+            worst_idx = min(range(len(self._window_signals)), key=lambda i: float(self._window_signals[i]["score"]))
+            if score <= float(self._window_signals[worst_idx]["score"]):
+                return False
+            self._window_signals[worst_idx] = {
+                "epoch":      epoch,
+                "score":      score,
+                "confidence": confidence,
+                "direction":  direction,
+                "grade":      grade_str,
+                "pos_idx":    pos_idx,
+            }
+            return True
 
         self._window_signals.append({
             "epoch":      epoch,
