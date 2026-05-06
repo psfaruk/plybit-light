@@ -14,6 +14,8 @@ import pandas as pd
 import redis.asyncio as aioredis
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 import config
 from advanced_features import compute_all_advanced
@@ -568,7 +570,6 @@ async def news_refresher() -> None:
 
 # ── REST Endpoints ──────────────────────────────────────────────────────────
 
-@app.get("/")
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -616,6 +617,21 @@ def _candles_to_df(candles: list[dict[str, Any]]) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.sort_values("epoch").reset_index(drop=True)
     return df
+
+
+# ── Static frontend (SPA) — must be registered AFTER all API routes ──────────
+import os as _os
+_static_dir = _os.path.join(_os.path.dirname(__file__), "static")
+if _os.path.isdir(_static_dir):
+    app.mount("/assets", StaticFiles(directory=f"{_static_dir}/assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _spa(full_path: str) -> FileResponse:
+        # Serve static files (favicon, etc.) directly when present
+        candidate = _os.path.join(_static_dir, full_path)
+        if full_path and _os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(f"{_static_dir}/index.html")
 
 
 if __name__ == "__main__":
