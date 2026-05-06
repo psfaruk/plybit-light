@@ -163,6 +163,39 @@ def smc_score_pts(
     elif not bull and cp.get("chart_bear_flag"):
         pts += 5
 
+    # ── Pure Price Action (guide additions) ──────────────────
+    # HH+HL uptrend / LH+LL downtrend structure
+    if bull and smc.get("hh_hl_structure"):
+        pts += 5
+    elif not bull and smc.get("lh_ll_structure"):
+        pts += 5
+
+    # Role reversal retest (high-probability guide setup)
+    if bull and smc.get("role_reversal_bull"):
+        pts += 7
+    elif not bull and smc.get("role_reversal_bear"):
+        pts += 7
+
+    # Round number key level
+    if smc.get("round_number_near"):
+        pts += 4
+
+    # Momentum candles — directional, capped at 3 consecutive
+    if bull:
+        pts += min(int(smc.get("momentum_bull_count", 0)), 3) * 2
+    else:
+        pts += min(int(smc.get("momentum_bear_count", 0)), 3) * 2
+
+    # Real breakout confirmation
+    if bull and smc.get("breakout_real_bull"):
+        pts += 5
+    elif not bull and smc.get("breakout_real_bear"):
+        pts += 5
+
+    # Consolidation penalty — ranging market reduces SMC score
+    if smc.get("consolidation"):
+        pts *= 0.6
+
     return pts
 
 

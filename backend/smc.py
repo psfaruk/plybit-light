@@ -1,9 +1,73 @@
-"""SMC/ICT (Smart Money Concepts) feature extraction — 31+ features."""
+"""SMC/ICT (Smart Money Concepts) feature extraction — 40+ features."""
 
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
 
+
+# ── Pure Price Action helpers (guide: HH/HL, round numbers, role reversal) ───
+
+def _market_structure(swing_highs: list, swing_lows: list) -> tuple[bool, bool]:
+    """HH+HL = confirmed uptrend; LH+LL = confirmed downtrend."""
+    if len(swing_highs) < 2 or len(swing_lows) < 2:
+        return False, False
+    hh_hl = swing_highs[-1][1] > swing_highs[-2][1] and swing_lows[-1][1] > swing_lows[-2][1]
+    lh_ll = swing_highs[-1][1] < swing_highs[-2][1] and swing_lows[-1][1] < swing_lows[-2][1]
+    return bool(hh_hl), bool(lh_ll)
+
+
+def _round_number_near(price: float, atr: float) -> tuple[bool, float]:
+    """True + level if price is within 0.3×ATR of a significant round number."""
+    tol = atr * 0.3
+    # magnitude: e.g. price=4523 → mag=10; price=1.3245 → mag=0.01
+    mag = 10 ** max(int(np.floor(np.log10(abs(price)))) - 1, -3)
+    for mult in (1, 2, 5, 10, 50):
+        interval = mag * mult
+        nearest  = round(price / interval) * interval
+        if abs(price - nearest) < tol:
+            return True, float(nearest)
+    return False, 0.0
+
+
+def _role_reversal(
+    swing_highs: list, swing_lows: list, price: float, atr: float
+) -> tuple[bool, bool]:
+    """
+    Bull role reversal: price retesting a prior swing-high (broken resistance = new support).
+    Bear role reversal: price retesting a prior swing-low (broken support = new resistance).
+    """
+    tol = atr * 0.6
+    bull_rr = any(abs(price - sh) < tol for _, sh in swing_highs[:-1]) if len(swing_highs) >= 2 else False
+    bear_rr = any(abs(price - sl) < tol for _, sl in swing_lows[:-1])  if len(swing_lows)  >= 2 else False
+    return bool(bull_rr), bool(bear_rr)
+
+
+def _momentum_candles(df: pd.DataFrame, n: int = 5) -> tuple[int, int]:
+    """Count consecutive bull/bear candles ending at the most recent bar."""
+    subset = df.tail(n)
+    o_vals = subset["open"].values
+    c_vals = subset["close"].values
+    bull = bear = 0
+    for o, c in zip(reversed(o_vals), reversed(c_vals)):
+        if c > o:
+            if bear: break
+            bull += 1
+        elif c < o:
+            if bull: break
+            bear += 1
+        else:
+            break
+    return bull, bear
+
+
+def _consolidation(df: pd.DataFrame, lookback: int = 5) -> bool:
+    """True if recent candles are narrow (< 45% of 20-bar ATR) — ranging market."""
+    recent_rng = (df["high"] - df["low"]).tail(lookback).mean()
+    base_atr   = (df["high"] - df["low"]).tail(20).mean()
+    return bool(recent_rng < base_atr * 0.45)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _swing_points(high: pd.Series, low: pd.Series, n: int = 5):
     swing_highs = []
@@ -155,6 +219,33 @@ def compute_smc_features(df: pd.DataFrame, utc_hour: int = 0) -> dict:
     swept_low_leg  = float(c.iloc[-1]) > float(l.tail(20).iloc[:-1].min()) and float(l.iloc[-1]) < float(l.tail(20).iloc[:-1].min())
     features["liquidity_swept"] = int(swept_high_leg or swept_low_leg or bsl_swept or ssl_swept)
 
+    # ── Pure Price Action — new guide features ───────────────
+    hh_hl, lh_ll = _market_structure(swing_highs, swing_lows)
+    features["hh_hl_structure"] = int(hh_hl)
+    features["lh_ll_structure"] = int(lh_ll)
+
+    rn_near, rn_level = _round_number_near(price, atr_val)
+    features["round_number_near"]  = int(rn_near)
+    features["round_number_level"] = rn_level
+
+    rr_bull, rr_bear = _role_reversal(swing_highs, swing_lows, price, atr_val)
+    features["role_reversal_bull"] = int(rr_bull)
+    features["role_reversal_bear"] = int(rr_bear)
+
+    mc_bull, mc_bear = _momentum_candles(df)
+    features["momentum_bull_count"] = mc_bull
+    features["momentum_bear_count"] = mc_bear
+
+    features["consolidation"] = int(_consolidation(df))
+
+    # Real breakout: big-body candle closing beyond previous 20-bar range
+    body_now  = abs(float(c.iloc[-1]) - float(o.iloc[-1]))
+    rng20_hi  = float(h.tail(21).iloc[:-1].max())
+    rng20_lo  = float(l.tail(21).iloc[:-1].min())
+    big_body  = body_now > atr_val * 0.6
+    features["breakout_real_bull"] = int(big_body and float(c.iloc[-1]) > rng20_hi)
+    features["breakout_real_bear"] = int(big_body and float(c.iloc[-1]) < rng20_lo)
+
     # ── Premium / Discount ───────────────────────────────────
     rng_high = h.tail(50).max()
     rng_low  = l.tail(50).min()
@@ -205,11 +296,15 @@ def compute_smc_features(df: pd.DataFrame, utc_hour: int = 0) -> dict:
         features["bullish_bos"] * 7 +
         features["in_ote_zone_bull"] * 5 +
         features["in_discount_zone"] * 4 +
-        features["buy_side_liquidity"] * 4 +   # BSL above → price will run UP
-        features["liq_sweep_bull"] * 8 +        # SSL swept → reversal UP
+        features["buy_side_liquidity"] * 4 +      # BSL above → price will run UP
+        features["liq_sweep_bull"] * 8 +           # SSL swept → reversal UP
         features["kz_london"] * 3 +
         features["kz_overlap"] * 3 +
-        features["bullish_choch"] * 6
+        features["bullish_choch"] * 6 +
+        features["hh_hl_structure"] * 5 +          # HH+HL confirmed uptrend
+        features["role_reversal_bull"] * 6 +        # broken resistance = new support
+        min(features["momentum_bull_count"], 3) * 2 + # consecutive bull candles
+        features["breakout_real_bull"] * 4
     )
     bear_score = (
         features["price_at_bearish_ob"] * 10 +
@@ -217,11 +312,15 @@ def compute_smc_features(df: pd.DataFrame, utc_hour: int = 0) -> dict:
         features["bearish_bos"] * 7 +
         features["in_ote_zone_bear"] * 5 +
         features["in_premium_zone"] * 4 +
-        features["sell_side_liquidity"] * 4 +   # SSL below → price will run DOWN
-        features["liq_sweep_bear"] * 8 +         # BSL swept → reversal DOWN
+        features["sell_side_liquidity"] * 4 +      # SSL below → price will run DOWN
+        features["liq_sweep_bear"] * 8 +            # BSL swept → reversal DOWN
         features["kz_london"] * 3 +
         features["kz_overlap"] * 3 +
-        features["bearish_choch"] * 6
+        features["bearish_choch"] * 6 +
+        features["lh_ll_structure"] * 5 +           # LH+LL confirmed downtrend
+        features["role_reversal_bear"] * 6 +         # broken support = new resistance
+        min(features["momentum_bear_count"], 3) * 2 + # consecutive bear candles
+        features["breakout_real_bear"] * 4
     )
     features["smc_bull_score"] = bull_score
     features["smc_bear_score"] = bear_score
@@ -252,5 +351,11 @@ def _empty_smc() -> dict:
         "kz_asian": 0, "kz_london": 0, "kz_newyork": 0,
         "kz_overlap": 0, "kz_london_close": 0, "kz_gold": 0,
         "trend": "range",
+        "hh_hl_structure": 0, "lh_ll_structure": 0,
+        "round_number_near": 0, "round_number_level": 0.0,
+        "role_reversal_bull": 0, "role_reversal_bear": 0,
+        "momentum_bull_count": 0, "momentum_bear_count": 0,
+        "consolidation": 0,
+        "breakout_real_bull": 0, "breakout_real_bear": 0,
         "smc_bull_score": 0, "smc_bear_score": 0, "smc_net_score": 0,
     }

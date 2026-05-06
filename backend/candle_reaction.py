@@ -109,18 +109,20 @@ def compute_candle_reaction(
     net_score  = bull_score - bear_score
 
     return {
-        "bull_score":    bull_score,
-        "bear_score":    bear_score,
-        "net_score":     net_score,
-        "signal_boost":  (net_score / 100.0) * 0.12,
-        "pin_bar":       float(pin_bull or pin_bear),
-        "engulfing":     float(bull_engulf or bear_engulf),
-        "pin_bull":      float(pin_bull),
-        "pin_bear":      float(pin_bear),
-        "bull_engulf":   float(bull_engulf),
-        "bear_engulf":   float(bear_engulf),
-        "atr_score":     atr_score,
-        "close_pos":     close_pos,
+        "bull_score":         bull_score,
+        "bear_score":         bear_score,
+        "net_score":          net_score,
+        "signal_boost":       (net_score / 100.0) * 0.12,
+        "pin_bar":            float(pin_bull or pin_bear),
+        "engulfing":          float(bull_engulf or bear_engulf),
+        "pin_bull":           float(pin_bull),
+        "pin_bear":           float(pin_bear),
+        "bull_engulf":        float(bull_engulf),
+        "bear_engulf":        float(bear_engulf),
+        "atr_score":          atr_score,
+        "close_pos":          close_pos,
+        "close_upper_third":  float(close_pos > 0.67),   # buyers dominated the candle
+        "close_lower_third":  float(close_pos < 0.33),   # sellers dominated the candle
     }
 
 
@@ -131,4 +133,5 @@ def _zero() -> dict[str, float]:
         "pin_bull": 0.0, "pin_bear": 0.0,
         "bull_engulf": 0.0, "bear_engulf": 0.0,
         "atr_score": 50.0, "close_pos": 0.5,
+        "close_upper_third": 0.0, "close_lower_third": 0.0,
     }

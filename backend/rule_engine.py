@@ -145,6 +145,64 @@ def rule_engine_predict(
         bear_score += 35 * kz_w
         rules_fired.append("smc_full_bear")
 
+    # ── Rule: HH/HL uptrend + key level ─────────────────────
+    if smc.get("hh_hl_structure") and (smc.get("price_at_bullish_ob") or smc.get("in_ote_zone_bull") or smc.get("in_discount_zone")):
+        bull_score += 12 * kz_w
+        rules_fired.append("hh_hl_key_level")
+    if smc.get("lh_ll_structure") and (smc.get("price_at_bearish_ob") or smc.get("in_ote_zone_bear") or smc.get("in_premium_zone")):
+        bear_score += 12 * kz_w
+        rules_fired.append("lh_ll_key_level")
+
+    # ── Rule: Role reversal retest ────────────────────────────
+    if smc.get("role_reversal_bull") and (reaction.get("pin_bull") or reaction.get("bull_engulf")):
+        bull_score += 15 * kz_w
+        rules_fired.append("role_reversal_bull_retest")
+    if smc.get("role_reversal_bear") and (reaction.get("pin_bear") or reaction.get("bear_engulf")):
+        bear_score += 15 * kz_w
+        rules_fired.append("role_reversal_bear_retest")
+
+    # ── Rule: Round number rejection ─────────────────────────
+    if smc.get("round_number_near"):
+        net_react = float(reaction.get("net_score", 0))
+        if net_react > 30:
+            bull_score += 8
+            rules_fired.append("round_number_bull_reject")
+        elif net_react < -30:
+            bear_score += 8
+            rules_fired.append("round_number_bear_reject")
+
+    # ── Rule: Momentum confirmation (3+ consecutive candles) ─
+    mc_bull = int(smc.get("momentum_bull_count", 0))
+    mc_bear = int(smc.get("momentum_bear_count", 0))
+    if mc_bull >= 3:
+        bull_score += min(mc_bull * 2, 8)
+        rules_fired.append(f"momentum_bull_{mc_bull}")
+    if mc_bear >= 3:
+        bear_score += min(mc_bear * 2, 8)
+        rules_fired.append(f"momentum_bear_{mc_bear}")
+
+    # ── Rule: Close in upper/lower third ────────────────────
+    if reaction.get("close_upper_third") and bull_score > bear_score:
+        bull_score += 6
+        rules_fired.append("close_upper_third")
+    if reaction.get("close_lower_third") and bear_score > bull_score:
+        bear_score += 6
+        rules_fired.append("close_lower_third")
+
+    # ── Rule: Real breakout confirmation ─────────────────────
+    if smc.get("breakout_real_bull"):
+        bull_score += 10
+        rules_fired.append("breakout_real_bull")
+    if smc.get("breakout_real_bear"):
+        bear_score += 10
+        rules_fired.append("breakout_real_bear")
+
+    # ── Rule: Consolidation — halve all scores (guide: ranging = no trade) ──
+    if smc.get("consolidation"):
+        bull_score *= 0.5
+        bear_score *= 0.5
+        rules_fired.append("consolidation_penalty")
+
     # ── Normalize to confidence ───────────────────────────────
     max_possible = 160.0
     if bull_score > bear_score and bull_score > 15:
