@@ -97,18 +97,19 @@ def smc_score_pts(
     elif smc.get("in_ote_zone"):
         pts += 3  # legacy fallback
 
-    # Liquidity
-    if bull and smc.get("sell_side_liquidity"):
+    # Liquidity (ICT: BSL above → bull pressure; SSL below → bear pressure)
+    if bull and smc.get("buy_side_liquidity"):          # BSL above → price runs UP
         pts += 5
-    elif not bull and smc.get("buy_side_liquidity"):
+    elif not bull and smc.get("sell_side_liquidity"):   # SSL below → price runs DOWN
         pts += 5
-    if smc.get("liquidity_swept"):
-        pts += 8
-    # Directional sweep: fake sweep of SSL/BSL signals reversal
+    # Directional sweep: SSL swept → reversal UP (+8); BSL swept → reversal DOWN (+8)
     if bull and smc.get("liq_sweep_bull"):
-        pts += 6
+        pts += 8
     elif not bull and smc.get("liq_sweep_bear"):
-        pts += 6
+        pts += 8
+    # Non-directional liquidity confirmation
+    if smc.get("liquidity_swept"):
+        pts += 4
 
     # Institutional
     if bull and (inst.get("judas_swing_bull") or inst.get("mm_bull_cycle")):

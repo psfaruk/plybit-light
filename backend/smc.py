@@ -194,13 +194,19 @@ def compute_smc_features(df: pd.DataFrame, utc_hour: int = 0) -> dict:
         features["trend"] = "range"
 
     # ── Composite Scores ─────────────────────────────────────
+    # ICT liquidity rules:
+    # BSL (equal highs above) = bulls will run price UP to sweep them → bull pressure
+    # SSL (equal lows below)  = bears will run price DOWN to sweep them → bear pressure
+    # liq_sweep_bull (SSL just swept) → reversal UP expected
+    # liq_sweep_bear (BSL just swept) → reversal DOWN expected
     bull_score = (
         features["price_at_bullish_ob"] * 10 +
         features["price_in_bullish_fvg"] * 8 +
         features["bullish_bos"] * 7 +
-        features["in_ote_zone"] * 5 +
-        features["sell_side_liquidity"] * 5 +
-        features["liquidity_swept"] * 4 +
+        features["in_ote_zone_bull"] * 5 +
+        features["in_discount_zone"] * 4 +
+        features["buy_side_liquidity"] * 4 +   # BSL above → price will run UP
+        features["liq_sweep_bull"] * 8 +        # SSL swept → reversal UP
         features["kz_london"] * 3 +
         features["kz_overlap"] * 3 +
         features["bullish_choch"] * 6
@@ -209,9 +215,10 @@ def compute_smc_features(df: pd.DataFrame, utc_hour: int = 0) -> dict:
         features["price_at_bearish_ob"] * 10 +
         features["price_in_bearish_fvg"] * 8 +
         features["bearish_bos"] * 7 +
-        features["in_premium_zone"] * 5 +
-        features["buy_side_liquidity"] * 5 +
-        features["liquidity_swept"] * 4 +
+        features["in_ote_zone_bear"] * 5 +
+        features["in_premium_zone"] * 4 +
+        features["sell_side_liquidity"] * 4 +   # SSL below → price will run DOWN
+        features["liq_sweep_bear"] * 8 +         # BSL swept → reversal DOWN
         features["kz_london"] * 3 +
         features["kz_overlap"] * 3 +
         features["bearish_choch"] * 6
