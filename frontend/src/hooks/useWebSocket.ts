@@ -7,6 +7,8 @@ const WS_BASE = import.meta.env.VITE_WS_URL ??
 const API_BASE = import.meta.env.VITE_API_URL ??
   `${location.protocol}//${location.host}`;
 
+const TICK_THROTTLE_MS = 50;
+
 export function useWebSocket() {
   const {
     activePair, activeTf, refreshTick, signalRefreshTick,
@@ -14,6 +16,11 @@ export function useWebSocket() {
     setSignal, setModelStatus, setBlockReason, addMarker,
   } = useStore();
   const ws = useRef<WebSocket | null>(null);
+
+  // Tick throttle state — keyed by `${pair}_${granularity}`
+  const lastTickRef    = useRef<Record<string, number>>({});
+  const pendingTickRef = useRef<Record<string, { gran: number; candle: { epoch: number; open: number; high: number; low: number; close: number } }>>({});
+  const tickTimerRef   = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   // Fetch history via REST whenever pair, timeframe, or refresh tick changes
   useEffect(() => {
@@ -125,9 +132,27 @@ export function useWebSocket() {
         }
 
         case "candle_update": {
-          const c = msg.candle as { epoch: number; open: number; high: number; low: number; close: number };
+          const c    = msg.candle as { epoch: number; open: number; high: number; low: number; close: number };
           const gran = (msg.granularity as number) ?? 60;
-          addCandle(gran, c, false);
+          const key  = `${activePair}_${gran}`;
+          const now  = Date.now();
+          pendingTickRef.current[key] = { gran, candle: c };
+          const last = lastTickRef.current[key] ?? 0;
+          if (now - last >= TICK_THROTTLE_MS) {
+            lastTickRef.current[key] = now;
+            addCandle(gran, c, false);
+            delete pendingTickRef.current[key];
+          } else {
+            if (tickTimerRef.current[key]) clearTimeout(tickTimerRef.current[key]);
+            tickTimerRef.current[key] = setTimeout(() => {
+              const pending = pendingTickRef.current[key];
+              if (pending) {
+                lastTickRef.current[key] = Date.now();
+                addCandle(pending.gran, pending.candle, false);
+                delete pendingTickRef.current[key];
+              }
+            }, TICK_THROTTLE_MS - (now - last));
+          }
           break;
         }
 
@@ -163,6 +188,8 @@ export function useWebSocket() {
     return () => {
       active = false;
       clearTimeout(retryTimer);
+      Object.values(tickTimerRef.current).forEach(clearTimeout);
+      tickTimerRef.current = {};
       const current = ws.current;
       if (current) {
         if (current.readyState === WebSocket.CONNECTING) {

@@ -36,7 +36,7 @@ from signal_scorer import (
 )
 from smc import compute_smc_features
 from stacking_model import StackingEnsemble
-from telegram_bot import send_signal_alert
+from telegram_bot import send_signal_alert, update_best_signal, try_send_minute_signal
 from timing_engine import aggregate_samples
 from window_selector import WindowSelector
 from signal_history import SignalHistory
@@ -84,9 +84,9 @@ last_signal_per_pair: dict[str, dict[str, Any]] = {}
 # tick builders: pair → current 1M candle being assembled from raw ticks
 _tick_builders:  dict[str, dict]             = {}
 
-# throttle live tick broadcasts — 250 ms balances smoothness vs WS overhead
+# throttle live tick broadcasts — 50ms = 20fps smooth updates
 _last_live_broadcast: dict[str, float]       = {}
-_LIVE_BROADCAST_INTERVAL = 0.25
+_LIVE_BROADCAST_INTERVAL = 0.05
 
 # active WebSocket clients
 ws_clients: set[WebSocket] = set()
@@ -120,6 +120,7 @@ async def startup() -> None:
     asyncio.create_task(redis_subscriber())
     asyncio.create_task(news_refresher())
     asyncio.create_task(initial_history_loader())
+    asyncio.create_task(_telegram_minute_loop())
 
 
 # ── History Loading ──────────────────────────────────────────
@@ -568,8 +569,8 @@ async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
     if tab and tab.should_retrain(1):
         asyncio.create_task(train_models_for_pair(pair))
 
-    # Telegram alert — plan §21 filters to HIGH+ inside
-    asyncio.create_task(send_signal_alert(signal, pair))
+    # Telegram — register with per-minute best-signal tracker
+    update_best_signal(dict(signal), pair)
 
 
 async def _run_signal_pipeline(
@@ -944,6 +945,16 @@ async def news_refresher() -> None:
         except Exception:
             pass
         await asyncio.sleep(3600)
+
+
+async def _telegram_minute_loop() -> None:
+    """Every 5s: send best signal of the past minute to Telegram."""
+    while True:
+        await asyncio.sleep(5)
+        try:
+            await try_send_minute_signal()
+        except Exception as e:
+            log.warning("Telegram minute loop error: %s", e)
 
 
 # ── REST Endpoints ───────────────────────────────────────────

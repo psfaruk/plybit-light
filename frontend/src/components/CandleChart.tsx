@@ -24,6 +24,10 @@ export function CandleChart() {
   const lastDatasetKeyRef = useRef<string>("");
   const prevCandleLenRef  = useRef<number>(0);
 
+  // RAF-based smooth tick update
+  const pendingTickRef = useRef<{ time: number; open: number; high: number; low: number; close: number } | null>(null);
+  const rafIdRef       = useRef<number | null>(null);
+
   const { candles, activeTf, activePair, signal, markers, addMarker, pruneMarkers } = useStore();
   const isLoading = (candles[activeTf] ?? []).length === 0;
 
@@ -35,31 +39,45 @@ export function CandleChart() {
       layout: {
         background: { type: ColorType.Solid, color: "#080d14" },
         textColor:  "#7a8fa6",
-        fontFamily: "'Inter', system-ui, sans-serif",
+        fontFamily: "'JetBrains Mono', 'Inter', monospace",
         fontSize:   11,
       },
       grid: {
-        vertLines:   { color: "#0d1520" },
-        horzLines:   { color: "#0d1520" },
+        vertLines: { color: "rgba(255,255,255,0.03)" },
+        horzLines: { color: "rgba(255,255,255,0.03)" },
       },
-      crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: { borderColor: "#1a2a40" },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: { width: 1, color: "rgba(0,180,255,0.4)", labelBackgroundColor: "#121d2e" },
+        horzLine: { width: 1, color: "rgba(0,180,255,0.4)", labelBackgroundColor: "#121d2e" },
+      },
+      rightPriceScale: {
+        borderColor:  "rgba(255,255,255,0.05)",
+        scaleMargins: { top: 0.1, bottom: 0.1 },
+      },
       timeScale: {
-        borderColor:    "#1a2a40",
+        borderColor:    "rgba(255,255,255,0.05)",
         timeVisible:    true,
         secondsVisible: activeTf === 60,
+        rightOffset:    5,
+        barSpacing:     8,
+        minBarSpacing:  2,
       },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true },
+      handleScale:  { mouseWheel: true, pinch: true },
       width:  containerRef.current.clientWidth,
       height: containerRef.current.clientHeight,
     });
 
     const candleSeries = chart.addCandlestickSeries({
-      upColor:   "#00ff88",
-      downColor: "#ff2d6b",
-      borderUpColor:   "#00ff88",
-      borderDownColor: "#ff2d6b",
-      wickUpColor:   "#00cc66",
-      wickDownColor: "#cc1144",
+      upColor:          "#00ff88",
+      downColor:        "#ff2d6b",
+      borderUpColor:    "#00ff88",
+      borderDownColor:  "#ff2d6b",
+      wickUpColor:      "#00ff8880",
+      wickDownColor:    "#ff2d6b80",
+      priceLineVisible: false,
+      lastValueVisible: true,
     });
 
     const ema5 = chart.addLineSeries({
@@ -90,6 +108,10 @@ export function CandleChart() {
 
     return () => {
       observer.disconnect();
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
       chart.remove();
     };
   }, []);
@@ -155,16 +177,31 @@ export function CandleChart() {
       lastDatasetKeyRef.current = datasetKey;
       updateEMAs();
     } else {
-      // Incremental: covers tick updates AND new-candle additions
-      try {
-        candleSeriesRef.current.update({
-          time:  last.epoch as unknown as Time,
-          open:  last.open,
-          high:  last.high,
-          low:   last.low,
-          close: last.close,
+      // Tick update: buffer through RAF for smooth 60fps rendering
+      pendingTickRef.current = {
+        time:  last.epoch,
+        open:  last.open,
+        high:  last.high,
+        low:   last.low,
+        close: last.close,
+      };
+      if (rafIdRef.current === null) {
+        rafIdRef.current = requestAnimationFrame(() => {
+          rafIdRef.current = null;
+          const pending = pendingTickRef.current;
+          if (!pending || !candleSeriesRef.current) return;
+          pendingTickRef.current = null;
+          try {
+            candleSeriesRef.current.update({
+              time:  pending.time as unknown as Time,
+              open:  pending.open,
+              high:  pending.high,
+              low:   pending.low,
+              close: pending.close,
+            });
+          } catch {/* ignore */}
         });
-      } catch {/* ignore */}
+      }
       if (isNewCandle) updateEMAs();
     }
 
