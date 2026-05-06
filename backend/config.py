@@ -8,36 +8,20 @@ REDIS_URL     = os.getenv("REDIS_URL",     "redis://localhost:6379")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "")
 
-# ── Pairs (8 Forex majors + Gold) ────────────────────────────────
+# ── Pairs ────────────────────────────────────────────────────────
 FOREX_PAIRS = [
-    "frxXAUUSD",   # XAU/USD (Gold)
-    "frxEURUSD",   # EUR/USD
-    "frxGBPUSD",   # GBP/USD
-    "frxUSDJPY",   # USD/JPY
-    "frxAUDUSD",   # AUD/USD
-    "frxUSDCAD",   # USD/CAD
-    "frxNZDUSD",   # NZD/USD
-    "frxUSDCHF",   # USD/CHF
+    "frxEURUSD", "frxGBPUSD", "frxUSDJPY", "frxUSDCHF",
+    "frxUSDCAD", "frxAUDUSD", "frxNZDUSD",
+    "frxEURGBP", "frxEURJPY", "frxGBPJPY", "frxAUDJPY",
+    "frxEURCAD", "frxGBPCAD", "frxEURAUD", "frxGBPAUD",
+    "R_10", "R_25", "R_50", "R_75", "R_100",
+    "frxXAUUSD",
 ]
+CRYPTO_PAIRS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+ALL_PAIRS    = FOREX_PAIRS + CRYPTO_PAIRS
 
-# No index or crypto pairs — keeps training cycles focused per pair
-ALL_PAIRS = list(FOREX_PAIRS)
-
-# ── Candle Counts ───────────────────────────────────────────────────
-
-# How many candles to DISPLAY on the chart (fetched via paginated Deriv API)
-CHART_CANDLE_COUNT = {
-    60:    15000,   # 1M  → ~10 days  (3 paginated batches of 5000)
-    120:   10000,   # 2M  → ~14 days
-    300:   10000,   # 5M  → ~35 days
-    900:   8000,    # 15M → ~83 days
-    3600:  5000,    # 1H  → ~208 days
-    14400: 3000,    # 4H  → ~500 days
-}
-
-# How many candles the SIGNAL PIPELINE uses for fast analysis
-# (takes the most recent N from whatever is stored — keeps compute fast)
-ANALYSIS_CANDLE_COUNT = {
+# ── Candle Count ────────────────────────────────────────────────────
+CANDLE_COUNT = {
     60:    500,
     120:   300,
     300:   300,
@@ -45,12 +29,11 @@ ANALYSIS_CANDLE_COUNT = {
     3600:  200,
     14400: 150,
 }
-
-# Legacy alias — used by old fetch_history() calls
-CANDLE_COUNT = CHART_CANDLE_COUNT
-
-# In-memory ring buffer per pair/granularity
-HISTORY_COUNT = 20000
+CHART_DISPLAY_COUNT = {
+    60: 300, 120: 200, 300: 200,
+    900: 150, 3600: 100, 14400: 100,
+}
+HISTORY_COUNT = 5000
 
 # ── AI Training ──────────────────────────────────────────────────
 MIN_CANDLES   = 150
@@ -71,13 +54,13 @@ PRE_CLOSE_INTERVAL    = 0.5
 
 # ── 5M Window ────────────────────────────────────────────────────────────
 WINDOW_SIZE_SEC        = 300
-MAX_SIGNALS_PER_WINDOW = int(os.getenv("MAX_SIGNALS_PER_WINDOW", "3"))
-MIN_WINDOW_POSITION    = int(os.getenv("MIN_WINDOW_POSITION", "0"))
+MAX_SIGNALS_PER_WINDOW = 3
+MIN_WINDOW_POSITION    = 1
 
 # ── MTF Analysis ─────────────────────────────────────────────────────
 MTF_ANALYSIS_TFS  = [3600, 900, 300, 120]
 MTF_SIGNAL_TF     = 60
-MTF_MIN_AGREEMENT = 0.40   # plan §9: < 40% → soft penalty
+MTF_MIN_AGREEMENT = 0.40
 MTF_WEIGHTS       = {"1h": 0.35, "15m": 0.28, "5m": 0.22, "2m": 0.15}
 
 # ── App Timeframes ────────────────────────────────────────────────────
@@ -85,15 +68,14 @@ APP_TF_PRIMARY   = [60, 300, 900]
 APP_TF_SECONDARY = [120, 3600, 14400]
 
 # ── Signal Quality ─────────────────────────────────────────────────────
-GRADE_ELITE    = float(os.getenv("GRADE_ELITE", "0.82"))  # 👑
-GRADE_HIGH     = float(os.getenv("GRADE_HIGH", "0.75"))   # ✅
-GRADE_MODERATE = float(os.getenv("GRADE_MODERATE", "0.45"))  # ⚡
-TELEGRAM_MIN_GRADE      = os.getenv("TELEGRAM_MIN_GRADE", "HIGH").upper()
-SIGNAL_THRESHOLD        = float(os.getenv("SIGNAL_THRESHOLD", str(GRADE_MODERATE)))
+GRADE_ELITE    = 0.82
+GRADE_HIGH     = 0.75
+GRADE_MODERATE = 0.45
+SIGNAL_THRESHOLD        = 0.75
 SIGNAL_CONFIRM_REQUIRED = 8
-SIGNAL_MIN_EMIT_CONFIRM = int(os.getenv("SIGNAL_MIN_EMIT_CONFIRM", "3"))
+SIGNAL_MIN_EMIT_CONFIRM = 3
 
-# ── Gold ───────────────────────────────────────────────────────────────────
+# ── Gold ────────────────────────────────────────────────────────────────
 GOLD_ATR_MULTIPLIER = 1.5
 GOLD_COMEX_HOUR_UTC = 13
 GOLD_COMEX_MIN_UTC  = 30
