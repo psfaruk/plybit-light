@@ -146,14 +146,15 @@ async def train_models_for_pair(pair: str) -> None:
     if tab is None:
         tab = TabularPredictor(pair, 60)
         tabular_models[pair] = tab
-    tab.train(df, now_hour)
+    # Offload CPU-heavy training to thread pool so the event loop (and healthcheck) stay responsive
+    await asyncio.to_thread(tab.train, df, now_hour)
 
     dp = deep_models.get(pair)
     if dp is None:
         dp = DeepPredictor(pair)
         deep_models[pair] = dp
     if len(candles) >= 100:
-        dp.train(df, now_hour)
+        await asyncio.to_thread(dp.train, df, now_hour)
 
     await broadcast({
         "type":     "model_retrained",
@@ -566,6 +567,12 @@ async def news_refresher() -> None:
 
 
 # ── REST Endpoints ──────────────────────────────────────────────────────────
+
+@app.get("/")
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
 
 @app.get("/api/pairs")
 async def get_pairs() -> dict[str, Any]:
