@@ -39,9 +39,10 @@ from stacking_model import StackingEnsemble
 from telegram_bot import send_signal_alert
 from timing_engine import aggregate_samples
 from window_selector import WindowSelector
+from tick_store import tick_store
+from price_hold import analyze_price_hold
 
 import deriv as deriv_client
-import binance as binance_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("playbit")
@@ -122,13 +123,9 @@ async def initial_history_loader() -> None:
 
 
 async def load_history_for_pair(pair: str) -> None:
-    is_crypto = pair in config.CRYPTO_PAIRS
     for granularity in list(config.CANDLE_COUNT.keys()):
         try:
-            if is_crypto:
-                candles = await binance_client.fetch_history(pair, granularity)
-            else:
-                candles = await deriv_client.fetch_history(pair, granularity)
+            candles = await deriv_client.fetch_history(pair, granularity)
             if candles:
                 candle_store[pair][granularity] = candles
                 log.debug("Loaded %d × %ds candles for %s", len(candles), granularity, pair)
@@ -247,6 +244,8 @@ async def on_candle(pair: str, granularity: int, candle: dict[str, Any]) -> None
     if len(store) > config.HISTORY_COUNT:
         candle_store[pair][granularity] = store[-config.HISTORY_COUNT:]
     if granularity == 60:
+        # Record 1M price updates as ticks (covers Redis + Binance + Deriv sources)
+        tick_store.append(pair, time.time(), float(candle["close"]))
         kf = kalman_filters.get(pair)
         if kf:
             kf.update(float(candle["close"]))
@@ -305,14 +304,19 @@ async def _run_signal_pipeline(
     smc  = compute_smc_features(df_1m, utc_hour)
     inst = compute_institutional(df_1m, utc_hour, utc_minute)
     advanced = compute_all_advanced(df_1m)
-    wyckoff  = {k: int(v) for k, v in advanced.items() if k.startswith("wyckoff")}
-    elliott  = {k: float(v) for k, v in advanced.items() if k.startswith("elliott")}
-    sd       = {k: float(v) for k, v in advanced.items() if k.startswith("sd_")}
-    reaction  = compute_candle_reaction(df_1m)
+    wyckoff       = {k: int(v) for k, v in advanced.items() if k.startswith("wyckoff")}
+    elliott       = {k: float(v) for k, v in advanced.items() if k.startswith("elliott")}
+    sd            = {k: float(v) for k, v in advanced.items() if k.startswith("sd_")}
+    chart_patterns = {k: float(v) for k, v in advanced.items() if k.startswith("chart_")}
+    price_hold = analyze_price_hold(tick_store.get(pair), window_sec=3.0)
+    reaction  = compute_candle_reaction(df_1m, price_hold=price_hold)
     harmonics = detect_harmonics(df_1m)
     mtf = compute_mtf_agreement(candle_dfs, utc_hour)
     if float(mtf.get("agreement", 0)) < config.MTF_MIN_AGREEMENT:
         return _skip_signal("mtf_conflict")
+    # Plan: 1H and 15M must NOT be opposite (neutral 15M is OK, only conflict = skip)
+    if config.MTF_H1_15M_ALIGN and mtf.get("h1_15m_conflict", False):
+        return _skip_signal("h1_15m_conflict")
 
     tab = tabular_models.get(pair)
     tab_result = tab.predict(df_1m, utc_hour) if tab else {}
@@ -364,6 +368,23 @@ async def _run_signal_pipeline(
     if direction == "SKIP":
         return _skip_signal("no_consensus")
 
+    # Plan: 8/13+ AI models must agree with direction, avg confidence 59%+
+    # Models at 45-55% are neutral/abstain — only clearly aligned/opposing count
+    if all_model_probs:
+        bull_signal = direction == "GREEN"
+        if bull_signal:
+            aligned_probs  = [p for p in all_model_probs.values() if p > 0.55]
+            opposing_probs = [p for p in all_model_probs.values() if p < 0.45]
+        else:
+            aligned_probs  = [p for p in all_model_probs.values() if p < 0.45]
+            opposing_probs = [p for p in all_model_probs.values() if p > 0.55]
+        n_agree  = len(aligned_probs)
+        n_oppose = len(opposing_probs)
+        avg_conf = (sum(aligned_probs) / n_agree) if n_agree else 0.0
+        # Skip only if: fewer than required agree AND more opposing than aligned
+        if n_agree < config.AI_MIN_MODELS_AGREE and n_oppose >= n_agree:
+            return _skip_signal("ai_weak_consensus")
+
     stack_model = stacking_models.get(pair)
     if stack_model and stack_model.trained:
         stack_prob = stack_model.predict(list(all_model_probs.values()))
@@ -386,9 +407,15 @@ async def _run_signal_pipeline(
     if meta_prob < 0.50:
         return _skip_signal("meta_label_block")
 
-    mtf_pts    = mtf_score_pts(mtf)
-    smc_pts    = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott)
-    react_pts  = reaction_score_pts(reaction)
+    mtf_pts    = mtf_score_pts(mtf, direction)
+    # Plan: MTF layer must score 20+/45 (at least 2 aligned TFs)
+    if mtf_pts < config.MTF_PTS_MIN:
+        return _skip_signal("mtf_insufficient")
+    smc_pts    = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott, direction, chart_patterns)
+    # Plan: SMC layer must score 12+/30
+    if smc_pts < config.SMC_PTS_MIN:
+        return _skip_signal("smc_insufficient")
+    react_pts  = reaction_score_pts(reaction, direction)
     ai_pts_val = ai_score_pts(base_fused, meta_prob)
 
     confidence = score_to_confidence(
@@ -399,6 +426,28 @@ async def _run_signal_pipeline(
     confidence = min(confidence + h_boost, 0.99)
     cons_score = consensus_check(feat, direction)
     confidence = apply_consensus_penalty(confidence, cons_score)
+
+    # Volume-against-signal penalty: high-volume candle opposing direction = institutional counter-flow
+    bull_signal = direction == "GREEN"
+    if bull_signal and feat.get("vsa_high_vol_bear", 0):
+        confidence *= 0.80  # big selling volume while we're long → reduce confidence
+    elif not bull_signal and feat.get("vsa_high_vol_bull", 0):
+        confidence *= 0.80  # big buying volume while we're short → reduce confidence
+    # Volume spike bonus: high volume confirming direction = institutional backing
+    elif bull_signal and feat.get("vsa_high_vol_bull", 0):
+        confidence = min(confidence + 0.03, 0.99)
+    elif not bull_signal and feat.get("vsa_high_vol_bear", 0):
+        confidence = min(confidence + 0.03, 0.99)
+
+    # Exhaustion penalty: chasing late entries at trend tops/bottoms
+    # 5+ consecutive same-dir candles + overbought/oversold RSI = move likely exhausted
+    mom_bull = int(smc.get("momentum_bull_count", 0))
+    mom_bear = int(smc.get("momentum_bear_count", 0))
+    rsi14 = float(feat.get("rsi_14", 50))
+    if bull_signal and mom_bull >= 5 and rsi14 > 70:
+        confidence *= 0.80   # bull exhaustion: don't chase the top
+    elif (not bull_signal) and mom_bear >= 5 and rsi14 < 30:
+        confidence *= 0.80   # bear exhaustion: don't chase the bottom
 
     grade_str = grade(confidence)
     if grade_str == "SKIP":
@@ -427,6 +476,7 @@ async def _run_signal_pipeline(
         "mtf_context":      mtf,
         "smc_context":      smc,
         "candle_reaction":  reaction,
+        "price_hold":       price_hold,
         "patterns":         pattern_names,
         "ai_models":        all_model_probs,
         "bayes_uncertainty":bayes,
@@ -443,12 +493,12 @@ async def _run_signal_pipeline(
 
 def _check_signal_gates(pair: str, df: pd.DataFrame) -> str:
     now = time.time()
-    if pair not in config.CRYPTO_PAIRS:
-        dt  = datetime.now(timezone.utc)
-        dow = dt.weekday()
-        h   = dt.hour
-        if dow == 4 and h >= 21: return "market_closed"
-        if dow in (5, 6):        return "market_closed"
+    # Forex weekend close: Friday 21:00 UTC → Sunday 22:00 UTC
+    dt  = datetime.now(timezone.utc)
+    dow = dt.weekday()
+    h   = dt.hour
+    if dow == 4 and h >= 21: return "market_closed"
+    if dow in (5, 6):        return "market_closed"
     if is_news_window(pair, now):
         return "news_window"
     if len(df) >= 20:
@@ -519,7 +569,7 @@ async def news_refresher() -> None:
 
 @app.get("/api/pairs")
 async def get_pairs() -> dict[str, Any]:
-    return {"forex": config.FOREX_PAIRS, "crypto": config.CRYPTO_PAIRS, "status": "ok"}
+    return {"forex": config.FOREX_PAIRS, "status": "ok"}
 
 
 @app.get("/api/candles/{pair}")

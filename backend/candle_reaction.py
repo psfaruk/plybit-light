@@ -19,9 +19,10 @@ def _range(h: float, l: float) -> float:
 def compute_candle_reaction(
     df: pd.DataFrame,
     smc: dict | None = None,
+    price_hold: dict[str, float] | None = None,
 ) -> dict[str, float]:
     """
-    7-component candle reaction score.
+    8-component candle reaction score (7 candle + 1 institutional hold).
     Returns bull_score, bear_score, net_score (all 0-100), and signal_boost.
     """
     if len(df) < 3:
@@ -93,15 +94,24 @@ def compute_candle_reaction(
         elif at_bear and c < candle_mid:
             bear_zone_score = 90.0  # close below mid at bearish zone → bear confirmation
 
-    # Weighted composite
-    weights = [0.20, 0.18, 0.18, 0.15, 0.10, 0.14, 0.05]
+    # ── 8. Price Hold (Institutional Order Absorption) ──────────
+    # hold_strength 0-100; velocity reveals break direction after hold
+    hold_strength = float(price_hold.get("hold_strength", 0)) if price_hold else 0.0
+    tick_velocity = float(price_hold.get("tick_velocity", 0)) if price_hold else 0.0
+    # Bull hold: price held then broke upward (velocity > 0) or just held bullish candle
+    # Bear hold: price held then broke downward (velocity < 0)
+    bull_hold_score = hold_strength if (tick_velocity >= 0) else hold_strength * 0.2
+    bear_hold_score = hold_strength if (tick_velocity <= 0) else hold_strength * 0.2
+
+    # Weighted composite — hold weight 0.07 redistributed from zone (0.05→0.03)
+    weights = [0.19, 0.17, 0.17, 0.14, 0.10, 0.13, 0.03, 0.07]
     bull_components = [
         bull_wick_score, pin_bull_score, bull_body_score,
-        bull_mom_score, atr_score, bull_engulf_score, bull_zone_score,
+        bull_mom_score, atr_score, bull_engulf_score, bull_zone_score, bull_hold_score,
     ]
     bear_components = [
         bear_wick_score, pin_bear_score, bear_body_score,
-        bear_mom_score, atr_score, bear_engulf_score, bear_zone_score,
+        bear_mom_score, atr_score, bear_engulf_score, bear_zone_score, bear_hold_score,
     ]
 
     bull_score = float(sum(w * s for w, s in zip(weights, bull_components)))
@@ -121,8 +131,10 @@ def compute_candle_reaction(
         "bear_engulf":        float(bear_engulf),
         "atr_score":          atr_score,
         "close_pos":          close_pos,
-        "close_upper_third":  float(close_pos > 0.67),   # buyers dominated the candle
-        "close_lower_third":  float(close_pos < 0.33),   # sellers dominated the candle
+        "close_upper_third":  float(close_pos > 0.67),
+        "close_lower_third":  float(close_pos < 0.33),
+        "hold_strength":      hold_strength,
+        "hold_active":        float((price_hold or {}).get("price_hold_active", 0)),
     }
 
 
@@ -134,4 +146,5 @@ def _zero() -> dict[str, float]:
         "bull_engulf": 0.0, "bear_engulf": 0.0,
         "atr_score": 50.0, "close_pos": 0.5,
         "close_upper_third": 0.0, "close_lower_third": 0.0,
+        "hold_strength": 0.0, "hold_active": 0.0,
     }

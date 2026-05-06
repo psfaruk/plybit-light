@@ -98,15 +98,21 @@ def compute_mtf_agreement(
         direction  = "neutral"
         agreement  = 0.3
 
-    # Check 1H → 15M alignment (critical filter)
+    # Check 1H → 15M alignment
     h1_bias  = str(tf_results.get("1h", {}).get("bias", "neutral"))  # type: ignore[union-attr]
     m15_bias = str(tf_results.get("15m", {}).get("bias", "neutral")) # type: ignore[union-attr]
     aligned  = h1_bias == m15_bias and h1_bias != "neutral"
+    # Conflict = explicitly opposite directions (neutral 15M is NOT a conflict)
+    h1_15m_conflict = (
+        (h1_bias == "bull" and m15_bias == "bear") or
+        (h1_bias == "bear" and m15_bias == "bull")
+    )
 
     return {
-        "direction":   direction,
-        "agreement":   agreement,
-        "aligned":     aligned,
+        "direction":      direction,
+        "agreement":      agreement,
+        "aligned":        aligned,
+        "h1_15m_conflict": h1_15m_conflict,
         "killzone":    kz_name,
         "in_killzone": in_kz,
         "tfs":         tf_results,

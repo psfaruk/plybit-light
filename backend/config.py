@@ -7,18 +7,14 @@ REDIS_URL     = os.getenv("REDIS_URL",     "redis://localhost:6379")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "")
+TELEGRAM_MIN_GRADE = os.getenv("TELEGRAM_MIN_GRADE",  "MODERATE")
 
-# ── Pairs ────────────────────────────────────────────────────────
+# ── Pairs (8 majors + Gold) ──────────────────────────────────────
 FOREX_PAIRS = [
     "frxEURUSD", "frxGBPUSD", "frxUSDJPY", "frxUSDCHF",
-    "frxUSDCAD", "frxAUDUSD", "frxNZDUSD",
-    "frxEURGBP", "frxEURJPY", "frxGBPJPY", "frxAUDJPY",
-    "frxEURCAD", "frxGBPCAD", "frxEURAUD", "frxGBPAUD",
-    "R_10", "R_25", "R_50", "R_75", "R_100",
-    "frxXAUUSD",
+    "frxUSDCAD", "frxAUDUSD", "frxNZDUSD", "frxXAUUSD",
 ]
-CRYPTO_PAIRS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
-ALL_PAIRS    = FOREX_PAIRS + CRYPTO_PAIRS
+ALL_PAIRS = FOREX_PAIRS
 
 # ── Candle Count ────────────────────────────────────────────────────
 CANDLE_COUNT = {
@@ -60,8 +56,10 @@ MIN_WINDOW_POSITION    = 1
 # ── MTF Analysis ─────────────────────────────────────────────────────
 MTF_ANALYSIS_TFS  = [3600, 900, 300, 120]
 MTF_SIGNAL_TF     = 60
-MTF_MIN_AGREEMENT = 0.40
+MTF_MIN_AGREEMENT = 0.42       # Minimum weighted TF consensus for signal
 MTF_WEIGHTS       = {"1h": 0.35, "15m": 0.28, "5m": 0.22, "2m": 0.15}
+MTF_H1_15M_ALIGN  = True       # 1H and 15M must NOT be opposite (neutral OK)
+MTF_PTS_MIN       = 18         # At least 2 TFs aligned with signal direction
 
 # ── App Timeframes ────────────────────────────────────────────────────
 APP_TF_PRIMARY   = [60, 300, 900]
@@ -70,10 +68,15 @@ APP_TF_SECONDARY = [120, 3600, 14400]
 # ── Signal Quality ─────────────────────────────────────────────────────
 GRADE_ELITE    = 0.82
 GRADE_HIGH     = 0.75
-GRADE_MODERATE = 0.45
+GRADE_MODERATE = 0.52          # Plan: minimum 52% for any signal output
 SIGNAL_THRESHOLD        = 0.75
 SIGNAL_CONFIRM_REQUIRED = 8
 SIGNAL_MIN_EMIT_CONFIRM = 3
+
+# ── Per-Layer Minimums (Plan requirements) ─────────────────────────────
+SMC_PTS_MIN         = 12       # Plan: SMC layer must score 12+/30
+AI_MIN_MODELS_AGREE = 8        # Plan: 8/13+ models must agree with direction
+AI_MIN_AVG_CONF     = 0.59     # Plan: average model confidence must be 59%+
 
 # ── Gold ────────────────────────────────────────────────────────────────
 GOLD_ATR_MULTIPLIER = 1.5

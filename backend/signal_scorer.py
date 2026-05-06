@@ -98,10 +98,15 @@ def smc_score_pts(
         pts += 3  # legacy fallback
 
     # Liquidity (ICT: BSL above → bull pressure; SSL below → bear pressure)
-    if bull and smc.get("buy_side_liquidity"):          # BSL above → price runs UP
+    if bull and smc.get("buy_side_liquidity"):
         pts += 5
-    elif not bull and smc.get("sell_side_liquidity"):   # SSL below → price runs DOWN
+    elif not bull and smc.get("sell_side_liquidity"):
         pts += 5
+    # Opposite liquidity not yet swept = sweep risk (price runs opposite first)
+    elif not bull and smc.get("buy_side_liquidity") and not smc.get("liq_sweep_bull"):
+        pts -= 5  # BSL above unswept during SELL = price may spike UP first
+    elif bull and smc.get("sell_side_liquidity") and not smc.get("liq_sweep_bear"):
+        pts -= 5  # SSL below unswept during BUY = price may dip DOWN first
     # Directional sweep: SSL swept → reversal UP (+8); BSL swept → reversal DOWN (+8)
     if bull and smc.get("liq_sweep_bull"):
         pts += 8
@@ -223,6 +228,13 @@ def reaction_score_pts(reaction: dict[str, float], direction: str = "GREEN") -> 
     else:
         if reaction.get("pin_bear"):   pts += 5
         if reaction.get("bear_engulf"): pts += 6
+
+    # Price hold bonus: institutional order absorption (Plan feature)
+    hold_strength = float(reaction.get("hold_strength", 0))
+    if hold_strength >= 80:
+        pts += 8   # Strong hold ≥ 2.4 s → high-confidence institutional footprint
+    elif hold_strength >= 50:
+        pts += 4   # Moderate hold ≥ 1.5 s
 
     return pts
 
