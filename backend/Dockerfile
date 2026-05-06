@@ -15,4 +15,4 @@ RUN mkdir -p models
 
 EXPOSE 8003
 
-CMD ["sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8003} --workers 1"]
+CMD python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8003} --workers 1
