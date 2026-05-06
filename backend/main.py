@@ -52,7 +52,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── State ────────────────────────────────────────────────────
+# ── State ────────────────────────────────────────────────────────────
 
 redis_client: aioredis.Redis | None = None
 
@@ -76,7 +76,7 @@ loss_streak:     dict[str, int]              = {}
 ws_clients: set[WebSocket] = set()
 
 
-# ── Lifecycle ────────────────────────────────────────────────
+# ── Lifecycle ────────────────────────────────────────────────────────
 
 @app.on_event("startup")
 async def startup() -> None:
@@ -106,7 +106,7 @@ async def startup() -> None:
     asyncio.create_task(initial_history_loader())
 
 
-# ── History Loading ──────────────────────────────────────────
+# ── History Loading ───────────────────────────────────────────────────
 
 async def initial_history_loader() -> None:
     """Load historical candles for all pairs on startup."""
@@ -170,7 +170,7 @@ async def train_models_for_pair(pair: str) -> None:
     })
 
 
-# ── Redis Subscriber ─────────────────────────────────────────
+# ── Redis Subscriber ──────────────────────────────────────────────────
 
 async def redis_subscriber() -> None:
     if redis_client is None:
@@ -242,7 +242,7 @@ async def direct_deriv_listener() -> None:
         asyncio.create_task(direct_deriv_listener())
 
 
-# ── Candle Processing ────────────────────────────────────────
+# ── Candle Processing ──────────────────────────────────────────────────
 
 async def on_candle(pair: str, granularity: int, candle: dict[str, Any]) -> None:
     if pair not in candle_store:
@@ -358,34 +358,34 @@ async def _run_signal_pipeline(
 ) -> dict[str, Any]:
     """Full 4-layer scoring pipeline."""
 
-    # ── Feature computation ──────────────────────────────────
+    # ── Feature computation ────────────────────────────────────────────
     feat = get_last_features(df_1m, utc_hour)
     adx  = float(feat.get("adx_14", 0))
 
-    # ── SMC/ICT ──────────────────────────────────────────────
+    # ── SMC/ICT ────────────────────────────────────────────────────────────
     smc  = compute_smc_features(df_1m, utc_hour)
 
-    # ── Institutional ────────────────────────────────────────
+    # ── Institutional ────────────────────────────────────────────────────────
     inst = compute_institutional(df_1m, utc_hour, utc_minute)
 
-    # ── Advanced (Wyckoff, Elliott, S/D) ─────────────────────
+    # ── Advanced (Wyckoff, Elliott, S/D) ──────────────────────────────────
     advanced = compute_all_advanced(df_1m)
     wyckoff  = {k: int(v) for k, v in advanced.items() if k.startswith("wyckoff")}
     elliott  = {k: float(v) for k, v in advanced.items() if k.startswith("elliott")}
     sd       = {k: float(v) for k, v in advanced.items() if k.startswith("sd_")}
 
-    # ── Candle Reaction ──────────────────────────────────────
+    # ── Candle Reaction ───────────────────────────────────────────────────────
     reaction = compute_candle_reaction(df_1m)
 
-    # ── Harmonic Patterns ────────────────────────────────────
+    # ── Harmonic Patterns ────────────────────────────────────────────────────
     harmonics = detect_harmonics(df_1m)
 
-    # ── MTF Analysis ─────────────────────────────────────────
+    # ── MTF Analysis ───────────────────────────────────────────────────────
     mtf = compute_mtf_agreement(candle_dfs, utc_hour)
     if float(mtf.get("agreement", 0)) < config.MTF_MIN_AGREEMENT:
         return _skip_signal("mtf_conflict")
 
-    # ── AI Models ────────────────────────────────────────────
+    # ── AI Models ────────────────────────────────────────────────────────────
     tab = tabular_models.get(pair)
     tab_result = tab.predict(df_1m, utc_hour) if tab else {}
     tab_probs  = tab_result.get("model_probs", {}) if isinstance(tab_result, dict) else {}
@@ -405,21 +405,33 @@ async def _run_signal_pipeline(
     all_model_probs: dict[str, float] = {}
     all_model_probs.update(tab_probs)  # type: ignore[arg-type]
     all_model_probs.update(deep_probs)
-    all_model_probs["rule"] = rule_conf if rule_dir != "SKIP" else 0.5
+    # Fix: rule_conf is a positive probability — invert for RED direction
+    if rule_dir == "GREEN":
+        all_model_probs["rule"] = rule_conf
+    elif rule_dir == "RED":
+        all_model_probs["rule"] = 1.0 - rule_conf
+    else:
+        all_model_probs["rule"] = 0.5
     all_model_probs["bayes"] = float(bayes.get("bayes_mean", 0.5))
 
-    # Fuse: weighted average
+    # Fuse: accuracy-weighted average (skill above coin-flip as weight)
     if all_model_probs:
-        model_probs_list = list(all_model_probs.values())
-        base_fused = float(np.mean(model_probs_list))
+        weights: list[float] = []
+        probs:   list[float] = []
+        for name, prob in all_model_probs.items():
+            if tab and name in tab.model_accuracies:
+                acc = float(tab.model_accuracies[name])
+            elif dp and hasattr(dp, "accuracy_map") and name in dp.accuracy_map:
+                acc = float(dp.accuracy_map[name])
+            else:
+                acc = 0.52
+            w = max(0.01, acc - 0.50)
+            weights.append(w)
+            probs.append(prob)
+        total_w = sum(weights) or 1.0
+        base_fused = sum(p * w for p, w in zip(probs, weights)) / total_w
     else:
         base_fused = 0.5
-
-    # Stacking override
-    stack_model = stacking_models.get(pair)
-    if stack_model and stack_model.trained:
-        stack_prob = stack_model.predict(list(all_model_probs.values()))
-        base_fused = stack_model.fuse(base_fused, stack_prob)
 
     # Direction
     direction = "GREEN" if base_fused > 0.5 else "RED"
@@ -429,27 +441,33 @@ async def _run_signal_pipeline(
     if direction == "SKIP":
         return _skip_signal("no_consensus")
 
-    # ── Kalman ───────────────────────────────────────────────
+    # Stacking override
+    stack_model = stacking_models.get(pair)
+    if stack_model and stack_model.trained:
+        stack_prob = stack_model.predict(list(all_model_probs.values()))
+        base_fused = stack_model.fuse(base_fused, stack_prob)
+
+    # ── Kalman ─────────────────────────────────────────────────────────────────
     kf = kalman_filters.get(pair)
     kalman_trend_d = kf.get_trend() if kf else {}
     kt = int(kalman_trend_d.get("kalman_trend", 0))
     kv = float(kalman_trend_d.get("kalman_velocity", 0))
     kalman_agree = (kt == 1 and direction == "GREEN") or (kt == -1 and direction == "RED")
 
-    # ── PPO safety gate ──────────────────────────────────────
+    # ── PPO safety gate ───────────────────────────────────────────────────────
     ppo = ppo_agents.get(pair)
     if ppo:
         ppo_dir = ppo.decide(feat, base_fused, direction)
         if ppo_dir == "SKIP":
             return _skip_signal("ppo_skip")
 
-    # ── Meta-labeling ────────────────────────────────────────
+    # ── Meta-labeling ────────────────────────────────────────────────────────
     meta = meta_labelers.get(pair)
     meta_prob = meta.predict(feat) if meta else 0.75
     if meta_prob < 0.50:
         return _skip_signal("meta_label_block")
 
-    # ── 4-Layer Scoring ──────────────────────────────────────
+    # ── 4-Layer Scoring ──────────────────────────────────────────────────────
     mtf_pts      = mtf_score_pts(mtf)
     smc_pts      = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott)
     react_pts    = reaction_score_pts(reaction)
@@ -554,7 +572,7 @@ def _skip_signal(reason: str) -> dict[str, Any]:
     return {"signal": "SKIP", "grade": "SKIP", "confidence": 0.0, "reason": reason}
 
 
-# ── WebSocket ────────────────────────────────────────────────
+# ── WebSocket ────────────────────────────────────────────────────────────
 
 @app.websocket("/ws/{pair}")
 async def websocket_endpoint(ws: WebSocket, pair: str) -> None:
@@ -604,7 +622,7 @@ async def broadcast(msg: dict[str, Any]) -> None:
     ws_clients.difference_update(dead)
 
 
-# ── Background Tasks ─────────────────────────────────────────
+# ── Background Tasks ───────────────────────────────────────────────────────
 
 async def news_refresher() -> None:
     while True:
@@ -615,7 +633,7 @@ async def news_refresher() -> None:
         await asyncio.sleep(3600)
 
 
-# ── REST Endpoints ───────────────────────────────────────────
+# ── REST Endpoints ──────────────────────────────────────────────────────────
 
 @app.get("/api/pairs")
 async def get_pairs() -> dict[str, Any]:
@@ -653,7 +671,7 @@ async def report_result(pair: str, won: bool) -> dict[str, Any]:
     return {"pair": pair, "streak": loss_streak.get(pair, 0)}
 
 
-# ── Helpers ──────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────
 
 def _candles_to_df(candles: list[dict[str, Any]]) -> pd.DataFrame:
     if not candles:
@@ -666,7 +684,7 @@ def _candles_to_df(candles: list[dict[str, Any]]) -> pd.DataFrame:
     return df
 
 
-# ── Entry point ──────────────────────────────────────────────
+# ── Entry point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
