@@ -16,7 +16,10 @@ def _range(h: float, l: float) -> float:
     return max(h - l, 1e-10)
 
 
-def compute_candle_reaction(df: pd.DataFrame) -> dict[str, float]:
+def compute_candle_reaction(
+    df: pd.DataFrame,
+    smc: dict | None = None,
+) -> dict[str, float]:
     """
     7-component candle reaction score.
     Returns bull_score, bear_score, net_score (all 0-100), and signal_boost.
@@ -26,17 +29,21 @@ def compute_candle_reaction(df: pd.DataFrame) -> dict[str, float]:
 
     last  = df.iloc[-1]
     prev  = df.iloc[-2]
-    prev2 = df.iloc[-3]
 
     o, h, l, c = float(last["open"]), float(last["high"]), float(last["low"]), float(last["close"])
-    po, ph, pl, pc = float(prev["open"]), float(prev["high"]), float(prev["low"]), float(prev["close"])
+    po, pc = float(prev["open"]), float(prev["close"])
 
     rng  = _range(h, l)
     body = _body(o, c)
 
-    # ATR from last 14 candles
-    trs  = [(float(df.iloc[i]["high"]) - float(df.iloc[i]["low"])) for i in range(max(0, len(df)-14), len(df))]
-    atr  = float(np.mean(trs)) if trs else rng
+    # Bug 6.3 fix: True ATR (include prev close for gaps)
+    trs: list[float] = []
+    for i in range(max(1, len(df) - 14), len(df)):
+        h_i  = float(df.iloc[i]["high"])
+        l_i  = float(df.iloc[i]["low"])
+        pc_i = float(df.iloc[i - 1]["close"])
+        trs.append(max(h_i - l_i, abs(h_i - pc_i), abs(l_i - pc_i)))
+    atr = float(np.mean(trs)) if trs else rng
 
     close_pos = (c - l) / rng  # 0=at low, 1=at high
 
@@ -65,25 +72,36 @@ def compute_candle_reaction(df: pd.DataFrame) -> dict[str, float]:
     # ── 5. ATR Relative Size ─────────────────────────────────
     atr_score = min((rng / (atr + 1e-10)) * 70, 100.0)
 
-    # ── 6. Engulfing Detection ───────────────────────────────
+    # Bug 6.2 fix: standard body engulfing (body engulfs body, not wick)
     prev_body = _body(po, pc)
-    bull_engulf = int(c > o and c > ph and o < pl and body > prev_body)
-    bear_engulf = int(c < o and c < pl and o > ph and body > prev_body)
+    prev_body_top    = max(po, pc)
+    prev_body_bottom = min(po, pc)
+    bull_engulf = int(c > o and c >= prev_body_top and o <= prev_body_bottom and body > prev_body)
+    bear_engulf = int(c < o and c <= prev_body_bottom and o >= prev_body_top and body > prev_body)
     bull_engulf_score = 95.0 if bull_engulf else 0.0
     bear_engulf_score = 95.0 if bear_engulf else 0.0
 
-    # ── 7. Zone Reaction (placeholder — needs OB/FVG zones) ──
-    zone_score = 0.0
+    # Zone reaction — directional: only adds to the aligned side
+    bull_zone_score = 0.0
+    bear_zone_score = 0.0
+    if smc:
+        candle_mid = (h + l) / 2.0
+        at_bull = smc.get("price_in_bullish_fvg") or smc.get("price_at_bullish_ob")
+        at_bear = smc.get("price_in_bearish_fvg") or smc.get("price_at_bearish_ob")
+        if at_bull and c > candle_mid:
+            bull_zone_score = 90.0  # close above mid at bullish zone → bull confirmation
+        elif at_bear and c < candle_mid:
+            bear_zone_score = 90.0  # close below mid at bearish zone → bear confirmation
 
     # Weighted composite
     weights = [0.20, 0.18, 0.18, 0.15, 0.10, 0.14, 0.05]
     bull_components = [
         bull_wick_score, pin_bull_score, bull_body_score,
-        bull_mom_score, atr_score, bull_engulf_score, zone_score,
+        bull_mom_score, atr_score, bull_engulf_score, bull_zone_score,
     ]
     bear_components = [
         bear_wick_score, pin_bear_score, bear_body_score,
-        bear_mom_score, atr_score, bear_engulf_score, zone_score,
+        bear_mom_score, atr_score, bear_engulf_score, bear_zone_score,
     ]
 
     bull_score = float(sum(w * s for w, s in zip(weights, bull_components)))
@@ -91,18 +109,20 @@ def compute_candle_reaction(df: pd.DataFrame) -> dict[str, float]:
     net_score  = bull_score - bear_score
 
     return {
-        "bull_score":    bull_score,
-        "bear_score":    bear_score,
-        "net_score":     net_score,
-        "signal_boost":  (net_score / 100.0) * 0.12,
-        "pin_bar":       float(pin_bull or pin_bear),
-        "engulfing":     float(bull_engulf or bear_engulf),
-        "pin_bull":      float(pin_bull),
-        "pin_bear":      float(pin_bear),
-        "bull_engulf":   float(bull_engulf),
-        "bear_engulf":   float(bear_engulf),
-        "atr_score":     atr_score,
-        "close_pos":     close_pos,
+        "bull_score":         bull_score,
+        "bear_score":         bear_score,
+        "net_score":          net_score,
+        "signal_boost":       (net_score / 100.0) * 0.12,
+        "pin_bar":            float(pin_bull or pin_bear),
+        "engulfing":          float(bull_engulf or bear_engulf),
+        "pin_bull":           float(pin_bull),
+        "pin_bear":           float(pin_bear),
+        "bull_engulf":        float(bull_engulf),
+        "bear_engulf":        float(bear_engulf),
+        "atr_score":          atr_score,
+        "close_pos":          close_pos,
+        "close_upper_third":  float(close_pos > 0.67),   # buyers dominated the candle
+        "close_lower_third":  float(close_pos < 0.33),   # sellers dominated the candle
     }
 
 
@@ -113,4 +133,5 @@ def _zero() -> dict[str, float]:
         "pin_bull": 0.0, "pin_bear": 0.0,
         "bull_engulf": 0.0, "bear_engulf": 0.0,
         "atr_score": 50.0, "close_pos": 0.5,
+        "close_upper_third": 0.0, "close_lower_third": 0.0,
     }

@@ -1,4 +1,4 @@
-# Root Dockerfile — builds Python backend (Railway single-service mode)
+# Root Dockerfile — builds Python backend
 FROM python:3.11-slim
 
 WORKDIR /app

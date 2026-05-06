@@ -1,8 +1,10 @@
 """PLAYBIT AI — FastAPI backend with WebSocket signal delivery."""
 
 import asyncio
+import glob
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -55,11 +57,7 @@ app.add_middleware(
 # ── State ────────────────────────────────────────────────────────────
 
 redis_client: aioredis.Redis | None = None
-
-# candle_store[symbol][granularity] = list of candle dicts
 candle_store: dict[str, dict[int, list[dict[str, Any]]]] = {}
-
-# per-pair ML models
 tabular_models:  dict[str, TabularPredictor] = {}
 deep_models:     dict[str, DeepPredictor]    = {}
 stacking_models: dict[str, StackingEnsemble] = {}
@@ -68,11 +66,7 @@ meta_labelers:   dict[str, MetaLabeler]      = {}
 kalman_filters:  dict[str, KalmanPriceFilter]= {}
 regime_detectors:dict[str, RegimeDetector]   = {}
 window_selectors:dict[str, WindowSelector]   = {}
-
-# circuit breaker: consecutive losses per pair
 loss_streak:     dict[str, int]              = {}
-
-# active WebSocket clients
 ws_clients: set[WebSocket] = set()
 
 
@@ -81,6 +75,18 @@ ws_clients: set[WebSocket] = set()
 @app.on_event("startup")
 async def startup() -> None:
     global redis_client
+
+    # Clear stale model files when CLEAR_MODELS=true (set once in Railway env after label fix)
+    if os.getenv("CLEAR_MODELS", "").lower() in ("1", "true", "yes"):
+        for pattern in ["models/*.joblib", "models/*.pt", "models/*.pkl"]:
+            for f in glob.glob(pattern):
+                try:
+                    os.remove(f)
+                    log.info("Cleared old model: %s", f)
+                except Exception:
+                    pass
+        log.info("Old models cleared — will retrain with correct labels.")
+
     try:
         redis_client = aioredis.from_url(config.REDIS_URL, decode_responses=True)
         await redis_client.ping()
@@ -89,7 +95,6 @@ async def startup() -> None:
         log.warning("Redis unavailable (%s) — running without streamer", e)
         redis_client = None
 
-    # Initialize per-pair state
     for pair in config.ALL_PAIRS:
         candle_store[pair]     = {}
         kalman_filters[pair]   = KalmanPriceFilter()
@@ -100,7 +105,6 @@ async def startup() -> None:
         stacking_models[pair]  = StackingEnsemble()
         loss_streak[pair]      = 0
 
-    # Start background tasks
     asyncio.create_task(redis_subscriber())
     asyncio.create_task(news_refresher())
     asyncio.create_task(initial_history_loader())
@@ -109,7 +113,6 @@ async def startup() -> None:
 # ── History Loading ───────────────────────────────────────────────────
 
 async def initial_history_loader() -> None:
-    """Load historical candles for all pairs on startup."""
     log.info("Loading historical candles…")
     tasks: list[asyncio.Task[None]] = []
     for pair in config.ALL_PAIRS:
@@ -120,19 +123,15 @@ async def initial_history_loader() -> None:
 
 async def load_history_for_pair(pair: str) -> None:
     is_crypto = pair in config.CRYPTO_PAIRS
-
     for granularity in list(config.CANDLE_COUNT.keys()):
         try:
             if is_crypto:
                 candles = await binance_client.fetch_history(pair, granularity)
             else:
                 candles = await deriv_client.fetch_history(pair, granularity)
-
             if candles:
                 candle_store[pair][granularity] = candles
                 log.debug("Loaded %d × %ds candles for %s", len(candles), granularity, pair)
-
-                # Train ML models on 1M data
                 if granularity == 60 and len(candles) >= config.MIN_CANDLES:
                     asyncio.create_task(train_models_for_pair(pair))
         except Exception as e:
@@ -143,18 +142,15 @@ async def train_models_for_pair(pair: str) -> None:
     candles = candle_store[pair].get(60, [])
     if len(candles) < config.MIN_CANDLES:
         return
-
     df = _candles_to_df(candles)
     now_hour = datetime.now(timezone.utc).hour
 
-    # Tabular models
     tab = tabular_models.get(pair)
     if tab is None:
         tab = TabularPredictor(pair, 60)
         tabular_models[pair] = tab
     tab.train(df, now_hour)
 
-    # Deep models
     dp = deep_models.get(pair)
     if dp is None:
         dp = DeepPredictor(pair)
@@ -177,13 +173,11 @@ async def redis_subscriber() -> None:
         log.info("Redis not available — starting Deriv WebSocket listener instead")
         asyncio.create_task(direct_deriv_listener())
         return
-
     log.info("Subscribing to Redis candle channels…")
     pubsub = redis_client.pubsub()
     patterns = [f"candle:{pair}:*" for pair in config.ALL_PAIRS]
     for p in patterns:
         await pubsub.psubscribe(p)
-
     async for msg in pubsub.listen():
         if msg["type"] != "pmessage":
             continue
@@ -201,26 +195,17 @@ async def redis_subscriber() -> None:
 
 
 async def direct_deriv_listener() -> None:
-    """Fallback: subscribe directly to Deriv WebSocket for live candles."""
     import websockets as ws_lib
-
     url = f"wss://ws.binaryws.com/websockets/v3?app_id={config.DERIVE_APP_ID}"
     try:
         async with ws_lib.connect(url) as ws:
             await ws.send(json.dumps({"authorize": config.DERIVE_TOKEN}))
             await ws.recv()
-
-            # Subscribe to 1M candles for primary pairs
-            for pair in config.FOREX_PAIRS[:5]:  # start with first 5 to avoid rate limit
+            for pair in config.FOREX_PAIRS[:5]:
                 await ws.send(json.dumps({
-                    "ticks_history": pair,
-                    "subscribe": 1,
-                    "end": "latest",
-                    "count": 1,
-                    "granularity": 60,
-                    "style": "candles",
+                    "ticks_history": pair, "subscribe": 1,
+                    "end": "latest", "count": 1, "granularity": 60, "style": "candles",
                 }))
-
             while True:
                 raw  = await ws.recv()
                 data = json.loads(raw)
@@ -247,10 +232,7 @@ async def direct_deriv_listener() -> None:
 async def on_candle(pair: str, granularity: int, candle: dict[str, Any]) -> None:
     if pair not in candle_store:
         candle_store[pair] = {}
-
     store = candle_store[pair].setdefault(granularity, [])
-
-    # Gap-free candle building
     if store and candle.get("open") is not None:
         last_close = float(store[-1]["close"])
         new_open   = float(candle["open"])
@@ -258,94 +240,56 @@ async def on_candle(pair: str, granularity: int, candle: dict[str, Any]) -> None
             candle["open"] = last_close
             candle["low"]  = min(float(candle["low"]), last_close)
             candle["high"] = max(float(candle["high"]), last_close)
-
-    # Merge with existing open candle or append
     if store and store[-1]["epoch"] == candle["epoch"]:
         store[-1] = candle
     else:
         store.append(candle)
-
-    # Trim history
     if len(store) > config.HISTORY_COUNT:
         candle_store[pair][granularity] = store[-config.HISTORY_COUNT:]
-
-    # Kalman filter update on 1M close price
     if granularity == 60:
         kf = kalman_filters.get(pair)
         if kf:
             kf.update(float(candle["close"]))
-
-    # Broadcast live candle update
-    await broadcast({
-        "type":        "candle_update",
-        "pair":        pair,
-        "granularity": granularity,
-        "candle":      candle,
-    })
-
-    # Check if 1M candle closed → run signal pipeline
+    await broadcast({"type": "candle_update", "pair": pair, "granularity": granularity, "candle": candle})
     if granularity == 60 and candle.get("closed", False):
         await on_1m_close(pair, candle)
 
 
 async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
-    """Full signal pipeline triggered on every 1M candle close."""
     log.debug("1M close: %s @ %s", pair, closed_candle.get("epoch"))
-
     candles_1m = candle_store[pair].get(60, [])
     df_1m      = _candles_to_df(candles_1m)
-
     if len(df_1m) < config.MIN_CANDLES:
         return
-
-    # Signal gate checks
     gate = _check_signal_gates(pair, df_1m)
     if gate:
-        await broadcast({
-            "type":   "signal_blocked",
-            "pair":   pair,
-            "reason": gate,
-        })
+        await broadcast({"type": "signal_blocked", "pair": pair, "reason": gate})
         return
-
-    # Build MTF candle dict
     candle_dfs: dict[int, pd.DataFrame] = {}
     for gran in config.MTF_ANALYSIS_TFS:
         c = candle_store[pair].get(gran, [])
         if c:
             candle_dfs[gran] = _candles_to_df(c)
-
     utc_hour   = datetime.now(timezone.utc).hour
     utc_minute = datetime.now(timezone.utc).minute
-
-    # Run full analysis
     signal = await _run_signal_pipeline(pair, df_1m, candle_dfs, utc_hour, utc_minute)
-
     if signal["grade"] != "SKIP":
-        # Window selector gate
         ws_sel = window_selectors.get(pair)
         epoch  = int(closed_candle.get("epoch", time.time()))
         mtf    = signal.get("mtf_context", {})
         mtf_ag = float(mtf.get("agreement", 0.5)) if isinstance(mtf, dict) else 0.5
         react  = signal.get("candle_reaction", {})
         net    = float(react.get("net_score", 0)) if isinstance(react, dict) else 0.0
-
         if ws_sel and not ws_sel.try_add(
             epoch, float(signal["confidence"]), str(signal["signal"]),
             str(signal["grade"]), mtf_ag, net,
         ):
-            return  # window full
-
+            return
         signal["window_plan"] = ws_sel.get_window_plan() if ws_sel else []
-
         await broadcast({"type": "signal", "pair": pair, **signal})
-
-        # Retrain if needed
         tab = tabular_models.get(pair)
         if tab and tab.should_retrain(1):
             asyncio.create_task(train_models_for_pair(pair))
-
-        # Telegram alert
         asyncio.create_task(send_signal_alert(signal, pair))
 
 
@@ -356,56 +300,37 @@ async def _run_signal_pipeline(
     utc_hour: int,
     utc_minute: int,
 ) -> dict[str, Any]:
-    """Full 4-layer scoring pipeline."""
-
-    # ── Feature computation ────────────────────────────────────────────
     feat = get_last_features(df_1m, utc_hour)
     adx  = float(feat.get("adx_14", 0))
-
-    # ── SMC/ICT ────────────────────────────────────────────────────────────
     smc  = compute_smc_features(df_1m, utc_hour)
-
-    # ── Institutional ────────────────────────────────────────────────────────
     inst = compute_institutional(df_1m, utc_hour, utc_minute)
-
-    # ── Advanced (Wyckoff, Elliott, S/D) ──────────────────────────────────
     advanced = compute_all_advanced(df_1m)
     wyckoff  = {k: int(v) for k, v in advanced.items() if k.startswith("wyckoff")}
     elliott  = {k: float(v) for k, v in advanced.items() if k.startswith("elliott")}
     sd       = {k: float(v) for k, v in advanced.items() if k.startswith("sd_")}
-
-    # ── Candle Reaction ───────────────────────────────────────────────────────
-    reaction = compute_candle_reaction(df_1m)
-
-    # ── Harmonic Patterns ────────────────────────────────────────────────────
+    reaction  = compute_candle_reaction(df_1m)
     harmonics = detect_harmonics(df_1m)
-
-    # ── MTF Analysis ───────────────────────────────────────────────────────
     mtf = compute_mtf_agreement(candle_dfs, utc_hour)
     if float(mtf.get("agreement", 0)) < config.MTF_MIN_AGREEMENT:
         return _skip_signal("mtf_conflict")
 
-    # ── AI Models ────────────────────────────────────────────────────────────
     tab = tabular_models.get(pair)
     tab_result = tab.predict(df_1m, utc_hour) if tab else {}
     tab_probs  = tab_result.get("model_probs", {}) if isinstance(tab_result, dict) else {}
-    tab_fused  = float(tab_result.get("fused", 0.5)) if isinstance(tab_result, dict) else 0.5
     tab_dir    = str(tab_result.get("direction", "SKIP")) if isinstance(tab_result, dict) else "SKIP"
 
     dp = deep_models.get(pair)
     deep_probs = dp.predict(df_1m, utc_hour) if dp else {}
     bayes = dp.predict_bayesian(df_1m, utc_hour) if dp else {"bayes_mean": 0.5, "bayes_std": 0.1}
 
-    # Rule engine
     rule_result = rule_engine_predict(df_1m, smc, inst, reaction, utc_hour)
     rule_dir    = str(rule_result.get("direction", "SKIP"))
     rule_conf   = float(rule_result.get("confidence", 0.5))
 
-    # Combine all model probs
+    # Combine model probs — rule_conf inverted for RED direction
     all_model_probs: dict[str, float] = {}
     all_model_probs.update(tab_probs)  # type: ignore[arg-type]
     all_model_probs.update(deep_probs)
-    # Fix: rule_conf is a positive probability — invert for RED direction
     if rule_dir == "GREEN":
         all_model_probs["rule"] = rule_conf
     elif rule_dir == "RED":
@@ -414,7 +339,7 @@ async def _run_signal_pipeline(
         all_model_probs["rule"] = 0.5
     all_model_probs["bayes"] = float(bayes.get("bayes_mean", 0.5))
 
-    # Fuse: accuracy-weighted average (skill above coin-flip as weight)
+    # Accuracy-weighted fusion (skill above coin-flip as weight)
     if all_model_probs:
         weights: list[float] = []
         probs:   list[float] = []
@@ -433,78 +358,59 @@ async def _run_signal_pipeline(
     else:
         base_fused = 0.5
 
-    # Direction
     direction = "GREEN" if base_fused > 0.5 else "RED"
     if tab_dir == "SKIP" and rule_dir == "SKIP":
         direction = "SKIP"
-
     if direction == "SKIP":
         return _skip_signal("no_consensus")
 
-    # Stacking override
     stack_model = stacking_models.get(pair)
     if stack_model and stack_model.trained:
         stack_prob = stack_model.predict(list(all_model_probs.values()))
         base_fused = stack_model.fuse(base_fused, stack_prob)
 
-    # ── Kalman ─────────────────────────────────────────────────────────────────
     kf = kalman_filters.get(pair)
     kalman_trend_d = kf.get_trend() if kf else {}
     kt = int(kalman_trend_d.get("kalman_trend", 0))
     kv = float(kalman_trend_d.get("kalman_velocity", 0))
     kalman_agree = (kt == 1 and direction == "GREEN") or (kt == -1 and direction == "RED")
 
-    # ── PPO safety gate ───────────────────────────────────────────────────────
     ppo = ppo_agents.get(pair)
     if ppo:
         ppo_dir = ppo.decide(feat, base_fused, direction)
         if ppo_dir == "SKIP":
             return _skip_signal("ppo_skip")
 
-    # ── Meta-labeling ────────────────────────────────────────────────────────
     meta = meta_labelers.get(pair)
     meta_prob = meta.predict(feat) if meta else 0.75
     if meta_prob < 0.50:
         return _skip_signal("meta_label_block")
 
-    # ── 4-Layer Scoring ──────────────────────────────────────────────────────
-    mtf_pts      = mtf_score_pts(mtf)
-    smc_pts      = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott)
-    react_pts    = reaction_score_pts(reaction)
-    ai_pts_val   = ai_score_pts(base_fused, meta_prob)
+    mtf_pts    = mtf_score_pts(mtf)
+    smc_pts    = smc_score_pts(smc, inst, wyckoff, harmonics, sd, elliott)
+    react_pts  = reaction_score_pts(reaction)
+    ai_pts_val = ai_score_pts(base_fused, meta_prob)
 
     confidence = score_to_confidence(
         mtf_pts, smc_pts, react_pts, ai_pts_val,
         meta_prob >= 0.60, adx, kalman_agree, kv,
     )
-
-    # Harmonic boost
     h_boost = harmonic_confidence_boost(harmonics, direction)
     confidence = min(confidence + h_boost, 0.99)
-
-    # Consensus filter
     cons_score = consensus_check(feat, direction)
     confidence = apply_consensus_penalty(confidence, cons_score)
 
     grade_str = grade(confidence)
     if grade_str == "SKIP":
         return _skip_signal("below_threshold")
-
-    # Circuit breaker
     if loss_streak.get(pair, 0) >= 5:
         return _skip_signal("circuit_breaker")
 
-    # Detect patterns list
-    from candle_reaction import compute_candle_reaction
     pattern_names: list[str] = []
-    if reaction.get("pin_bull"):
-        pattern_names.append("pin_bar_bull")
-    if reaction.get("pin_bear"):
-        pattern_names.append("pin_bar_bear")
-    if reaction.get("bull_engulf"):
-        pattern_names.append("bullish_engulfing")
-    if reaction.get("bear_engulf"):
-        pattern_names.append("bearish_engulfing")
+    if reaction.get("pin_bull"):   pattern_names.append("pin_bar_bull")
+    if reaction.get("pin_bear"):   pattern_names.append("pin_bar_bear")
+    if reaction.get("bull_engulf"): pattern_names.append("bullish_engulfing")
+    if reaction.get("bear_engulf"): pattern_names.append("bearish_engulfing")
     for h_name, h_val in harmonics.items():
         if h_val:
             pattern_names.append(h_name)
@@ -536,26 +442,17 @@ async def _run_signal_pipeline(
 
 
 def _check_signal_gates(pair: str, df: pd.DataFrame) -> str:
-    """Returns non-empty string (reason) if signal should be blocked."""
     now = time.time()
-
-    # Market closed (Forex: Fri 21:00 – Sun 21:00 UTC)
     if pair not in config.CRYPTO_PAIRS:
         dt  = datetime.now(timezone.utc)
-        dow = dt.weekday()  # 0=Mon, 5=Sat, 6=Sun
+        dow = dt.weekday()
         h   = dt.hour
-        if dow == 4 and h >= 21:
-            return "market_closed"
-        if dow in (5, 6):
-            return "market_closed"
-
-    # News window
+        if dow == 4 and h >= 21: return "market_closed"
+        if dow in (5, 6):        return "market_closed"
     if is_news_window(pair, now):
         return "news_window"
-
-    # Choppy market
     if len(df) >= 20:
-        atr   = float((df["high"] - df["low"]).rolling(14).mean().iloc[-1])
+        atr      = float((df["high"] - df["low"]).rolling(14).mean().iloc[-1])
         plus_dm  = df["high"].diff().clip(lower=0)
         minus_dm = (-df["low"].diff()).clip(lower=0)
         plus_di  = 100 * plus_dm.rolling(14).mean() / (atr + 1e-10)
@@ -564,7 +461,6 @@ def _check_signal_gates(pair: str, df: pd.DataFrame) -> str:
         adx = float(dx.rolling(14).mean().iloc[-1])
         if adx < 15:
             return "choppy_market"
-
     return ""
 
 
@@ -579,21 +475,11 @@ async def websocket_endpoint(ws: WebSocket, pair: str) -> None:
     await ws.accept()
     ws_clients.add(ws)
     log.info("WS connected: %s — %s", pair, ws.client)
-
     try:
-        # Send market status
         await ws.send_json({"type": "market_status", "open": True, "pair": pair})
-
-        # Send history
         candles = candle_store.get(pair, {}).get(60, [])
         if candles:
-            await ws.send_json({
-                "type":    "history",
-                "pair":    pair,
-                "candles": candles[-300:],
-            })
-
-        # Send model status
+            await ws.send_json({"type": "history", "pair": pair, "candles": candles[-300:]})
         tab = tabular_models.get(pair)
         await ws.send_json({
             "type":       "model_status",
@@ -602,10 +488,8 @@ async def websocket_endpoint(ws: WebSocket, pair: str) -> None:
             "accuracy":   tab.accuracy if tab else 0.0,
             "n_candles":  tab.n_candles if tab else 0,
         })
-
         while True:
-            await ws.receive_text()  # keep alive
-
+            await ws.receive_text()
     except WebSocketDisconnect:
         log.info("WS disconnected: %s", pair)
     finally:
@@ -622,8 +506,6 @@ async def broadcast(msg: dict[str, Any]) -> None:
     ws_clients.difference_update(dead)
 
 
-# ── Background Tasks ───────────────────────────────────────────────────────
-
 async def news_refresher() -> None:
     while True:
         try:
@@ -637,17 +519,13 @@ async def news_refresher() -> None:
 
 @app.get("/api/pairs")
 async def get_pairs() -> dict[str, Any]:
-    return {
-        "forex":  config.FOREX_PAIRS,
-        "crypto": config.CRYPTO_PAIRS,
-        "status": "ok",
-    }
+    return {"forex": config.FOREX_PAIRS, "crypto": config.CRYPTO_PAIRS, "status": "ok"}
 
 
 @app.get("/api/candles/{pair}")
 async def get_candles(pair: str, granularity: int = 60, count: int = 300) -> dict[str, Any]:
     candles = candle_store.get(pair, {}).get(granularity, [])
-    return {"pair": pair, "granularity": granularity, "candles": candles[-count:]}
+    return {"pair": pair, "granularity": granularity, "candles": candles[-count:] if count else candles}
 
 
 @app.get("/api/model/{pair}")
@@ -655,15 +533,14 @@ async def get_model_status(pair: str) -> dict[str, Any]:
     tab  = tabular_models.get(pair)
     deep = deep_models.get(pair)
     return {
-        "pair":         pair,
-        "tabular":      {"trained": bool(tab and tab.trained), "accuracy": tab.accuracy if tab else 0, "n_candles": tab.n_candles if tab else 0},
-        "deep":         {"trained": bool(deep and deep.trained), "models": list(deep.accuracy_map.keys()) if deep else []},
+        "pair":    pair,
+        "tabular": {"trained": bool(tab and tab.trained), "accuracy": tab.accuracy if tab else 0, "n_candles": tab.n_candles if tab else 0},
+        "deep":    {"trained": bool(deep and deep.trained), "models": list(deep.accuracy_map.keys()) if deep else []},
     }
 
 
 @app.post("/api/result/{pair}")
 async def report_result(pair: str, won: bool) -> dict[str, Any]:
-    """Report trade outcome — updates circuit breaker."""
     if won:
         loss_streak[pair] = 0
     else:
@@ -683,8 +560,6 @@ def _candles_to_df(candles: list[dict[str, Any]]) -> pd.DataFrame:
     df = df.sort_values("epoch").reset_index(drop=True)
     return df
 
-
-# ── Entry point ────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn

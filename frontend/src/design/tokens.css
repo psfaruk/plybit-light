@@ -23,10 +23,10 @@
   --white-soft:  #e0eaff;
   --muted:       #4a607a;
 
-  /* Typography */
-  --font-display: 'Orbitron', monospace;
-  --font-data:    'JetBrains Mono', monospace;
-  --font-body:    'Sora', sans-serif;
+  /* Typography — Inter / system fonts (clean, normal style) */
+  --font-display: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-data:    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-body:    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 
   /* Shadows / glows */
   --shadow-green:  0 0 20px #00ff8860, 0 0 40px #00ff8820;

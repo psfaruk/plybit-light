@@ -21,3 +21,5 @@ backend/models/*.pkl
 backend/models/*.joblib
 backend/models/*.pt
 backend/models/*.h5
+backend/catboost_info/
+.claude/

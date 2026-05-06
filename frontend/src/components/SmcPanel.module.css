@@ -1,0 +1,123 @@
+.panel {
+  display:        flex;
+  flex-direction: column;
+  gap:            var(--sp-2);
+  background:     var(--bg-glass);
+  backdrop-filter:blur(20px);
+  border:         1px solid rgba(255,255,255,0.06);
+  border-radius:  var(--radius-md);
+  padding:        var(--sp-3) var(--sp-4);
+}
+
+.sectionHeader {
+  font-family:    var(--font-display);
+  font-size:      9px;
+  letter-spacing: 2px;
+  color:          var(--muted);
+  margin-top:     var(--sp-2);
+  margin-bottom:  2px;
+}
+.sectionHeader:first-child { margin-top: 0; }
+
+/* MTF grid */
+.tfGrid {
+  display:   flex;
+  flex-wrap: wrap;
+  gap:       4px;
+}
+.tfCell {
+  display:        flex;
+  flex-direction: column;
+  align-items:    center;
+  padding:        3px 6px;
+  border-radius:  4px;
+  border:         1px solid rgba(255,255,255,0.08);
+  background:     rgba(255,255,255,0.03);
+  min-width:      36px;
+}
+.tfCell[data-bias="bull"] { border-color: rgba(0,255,136,0.3); background: rgba(0,255,136,0.06); }
+.tfCell[data-bias="bear"] { border-color: rgba(255,59,59,0.3);  background: rgba(255,59,59,0.06);  }
+
+.tfLabel {
+  font-family: var(--font-data);
+  font-size:   8px;
+  color:       var(--muted);
+}
+.tfBias {
+  font-size: 11px;
+  color:     var(--muted);
+}
+.tfCell[data-bias="bull"] .tfBias { color: var(--green-neon); }
+.tfCell[data-bias="bear"] .tfBias { color: var(--red-neon);   }
+
+/* Agreement bar */
+.agreementRow {
+  display:     flex;
+  align-items: center;
+  gap:         var(--sp-2);
+}
+.agreementLabel {
+  font-family: var(--font-data);
+  font-size:   10px;
+  color:       var(--muted);
+  flex-shrink: 0;
+  width:       66px;
+}
+.agreementBar {
+  flex:          1;
+  height:        4px;
+  background:    var(--bg-elevated);
+  border-radius: 2px;
+  overflow:      hidden;
+}
+.agreementFill {
+  height:        100%;
+  border-radius: 2px;
+  transition:    width 0.5s ease;
+  width:         var(--agree-pct, 50%);
+  background:    var(--muted);
+}
+.agreementFill[data-dir="green"] { background: var(--green-neon); }
+.agreementFill[data-dir="red"]   { background: var(--red-neon);   }
+
+.agreementPct {
+  font-family: var(--font-data);
+  font-size:   10px;
+  color:       var(--muted);
+  width:       28px;
+  text-align:  right;
+}
+
+.kzBadge {
+  font-family:    var(--font-display);
+  font-size:      9px;
+  letter-spacing: 1px;
+  color:          var(--gold-neon);
+  background:     rgba(255,215,0,0.08);
+  border:         1px solid rgba(255,215,0,0.2);
+  border-radius:  4px;
+  padding:        2px 6px;
+  align-self:     flex-start;
+}
+
+/* Chip grid */
+.chipGrid {
+  display:   flex;
+  flex-wrap: wrap;
+  gap:       4px;
+}
+.chip {
+  font-family:    var(--font-data);
+  font-size:      9px;
+  padding:        2px 7px;
+  border-radius:  4px;
+  border:         1px solid rgba(255,255,255,0.06);
+  color:          var(--muted);
+  background:     rgba(255,255,255,0.03);
+  transition:     color 0.2s, background 0.2s, border-color 0.2s;
+}
+.chip[data-active="true"] {
+  color:        var(--cyan-neon);
+  background:   rgba(0,245,255,0.08);
+  border-color: rgba(0,245,255,0.25);
+}

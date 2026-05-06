@@ -70,8 +70,8 @@ def compute_institutional(df: pd.DataFrame, utc_hour: int = 0, utc_minute: int =
     # ── Asian Range ──────────────────────────────────────────
     # Mark the Asian range high/low from prior session (simple approximation)
     asian_mask = (df.index % 86400 < 21600) if hasattr(df.index, '__mod__') else pd.Series([False]*len(df))
-    result["asian_range_high"] = float(h.tail(30).max())
-    result["asian_range_low"]  = float(l.tail(30).min())
+    result["asian_range_high"] = float(h.tail(360).max())
+    result["asian_range_low"]  = float(l.tail(360).min())
 
     # ── PO3 (Power of Three) ─────────────────────────────────
     result["po3_accumulation"] = float(0 <= utc_hour < 7)

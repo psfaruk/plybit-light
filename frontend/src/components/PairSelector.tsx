@@ -2,17 +2,24 @@ import { useStore } from "../store/useStore";
 import styles from "./PairSelector.module.css";
 
 const FOREX_PAIRS = [
-  "frxEURUSD","frxGBPUSD","frxUSDJPY","frxUSDCHF",
-  "frxUSDCAD","frxAUDUSD","frxNZDUSD",
-  "frxEURGBP","frxEURJPY","frxGBPJPY","frxAUDJPY",
-  "frxEURCAD","frxGBPCAD","frxEURAUD","frxGBPAUD",
-  "R_10","R_25","R_50","R_75","R_100","frxXAUUSD",
+  "frxXAUUSD",   // XAU/USD (Gold)
+  "frxEURUSD",   // EUR/USD
+  "frxGBPUSD",   // GBP/USD
+  "frxUSDJPY",   // USD/JPY
+  "frxAUDUSD",   // AUD/USD
+  "frxUSDCAD",   // USD/CAD
+  "frxNZDUSD",   // NZD/USD
+  "frxUSDCHF",   // USD/CHF
 ];
 
-const CRYPTO_PAIRS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT"];
-
-function formatPair(p: string): string {
-  return p.replace("frx","").replace("USD","").replace("USDT","/USDT") || p;
+export function formatPair(p: string): string {
+  // frxEURUSD → EUR/USD, frxXAUUSD → XAU/USD
+  if (p.startsWith("frx")) {
+    const clean = p.replace("frx", "");
+    if (clean.length === 6) return `${clean.slice(0, 3)}/${clean.slice(3)}`;
+    return clean;
+  }
+  return p;
 }
 
 export function PairSelector() {
@@ -24,15 +31,12 @@ export function PairSelector() {
         className={styles.select}
         value={activePair}
         onChange={(e) => setPair(e.target.value)}
+        aria-label="Trading pair"
+        title="Trading pair"
       >
-        <optgroup label="Forex">
+        <optgroup label="Forex / Gold">
           {FOREX_PAIRS.map((p) => (
             <option key={p} value={p}>{formatPair(p)}</option>
-          ))}
-        </optgroup>
-        <optgroup label="Crypto">
-          {CRYPTO_PAIRS.map((p) => (
-            <option key={p} value={p}>{p.replace("USDT","").replace("USD","")}/USDT</option>
           ))}
         </optgroup>
       </select>

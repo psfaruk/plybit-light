@@ -11,6 +11,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
+from sklearn.preprocessing import StandardScaler
 import joblib
 
 from features import compute_features
@@ -23,17 +24,16 @@ DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def _make_sequences(
-    df: pd.DataFrame, utc_hour: int = 0, seq_len: int = SEQ_LEN
+    feat_arr: np.ndarray,
+    labels: np.ndarray,
+    seq_len: int = SEQ_LEN,
 ) -> tuple[np.ndarray, np.ndarray]:
-    feat_df = compute_features(df, utc_hour).fillna(0)
-    labels  = (df["close"].shift(-1) > df["close"]).astype(int).fillna(0)
-
+    """Build (seq_len, features) windows — sequence ends AT index i (inclusive)."""
     X_list: list[np.ndarray] = []
     y_list: list[int]        = []
-    for i in range(seq_len, len(feat_df) - 1):
-        X_list.append(feat_df.iloc[i - seq_len: i].values.astype(np.float32))
-        y_list.append(int(labels.iloc[i]))
-
+    for i in range(seq_len - 1, len(feat_arr) - 1):
+        X_list.append(feat_arr[i - seq_len + 1: i + 1].astype(np.float32))
+        y_list.append(int(labels[i]))
     if not X_list:
         return np.array([]), np.array([])
     return np.stack(X_list), np.array(y_list, dtype=np.int64)
@@ -181,7 +181,9 @@ def _predict_torch(model: nn.Module, x: np.ndarray) -> float:
         xt  = torch.tensor(x, dtype=torch.float32).to(DEVICE)
         out = model(xt)
         prob = float(torch.softmax(out, dim=1)[0, 1].cpu())
-    return prob
+    # Clamp to [0.15, 0.85] — uncalibrated deep models output near-1 probs
+    # that dominate the weighted average and mask disagreement from other models.
+    return max(0.15, min(0.85, prob))
 
 
 # ── Main class ───────────────────────────────────────────────
@@ -190,10 +192,11 @@ class DeepPredictor:
     MODEL_NAMES = ["lstm", "cnn", "attn", "tcn", "nbeats"]
 
     def __init__(self, pair: str) -> None:
-        self.pair     = pair
+        self.pair        = pair
+        self.scaler      = StandardScaler()
         self.models: dict[str, nn.Module | None] = {n: None for n in self.MODEL_NAMES}
-        self.input_size = 0
-        self.trained  = False
+        self.input_size  = 0
+        self.trained     = False
         self.accuracy_map: dict[str, float] = {}
         self._load()
 
@@ -201,7 +204,15 @@ class DeepPredictor:
         if len(df) < 100:
             return {}
 
-        X, y = _make_sequences(df, utc_hour)
+        feat_df = compute_features(df, utc_hour).fillna(0)
+        # Bug 1.2 fix: label = next candle body direction (close > open)
+        labels_s = (df["close"].shift(-1) > df["open"].shift(-1)).astype(int).fillna(0)
+
+        # Bug 4.4 fix: scale features before building sequences
+        feat_arr = self.scaler.fit_transform(feat_df.values.astype(np.float32))
+        labels   = labels_s.values.astype(np.int64)
+
+        X, y = _make_sequences(feat_arr, labels)
         if len(X) < 50:
             return {}
 
@@ -222,7 +233,7 @@ class DeepPredictor:
             try:
                 model = Ctor(n_feat if name != "nbeats" else nbeats_X.shape[1])
                 Xin   = nbeats_X if name == "nbeats" else X
-                acc   = _train_torch(model, Xin, y, epochs=15)
+                acc   = _train_torch(model, Xin, y, epochs=30)
                 self.models[name] = model
                 self.accuracy_map[name] = acc
                 results[name] = acc
@@ -237,8 +248,12 @@ class DeepPredictor:
         if not self.trained or len(df) < SEQ_LEN + 5:
             return {}
 
-        feat_df = compute_features(df, utc_hour).fillna(0)
-        seq     = feat_df.iloc[-SEQ_LEN:].values.astype(np.float32)
+        feat_df  = compute_features(df, utc_hour).fillna(0)
+        seq_raw  = feat_df.iloc[-SEQ_LEN:].values.astype(np.float32)
+        try:
+            seq = self.scaler.transform(seq_raw)
+        except Exception:
+            seq = seq_raw
         seq_t   = seq[np.newaxis, :, :]  # (1, SEQ_LEN, features)
 
         probs: dict[str, float] = {}
@@ -260,8 +275,12 @@ class DeepPredictor:
         if model is None or len(df) < SEQ_LEN + 5:
             return {"bayes_mean": 0.5, "bayes_std": 0.1}
 
-        feat_df = compute_features(df, utc_hour).fillna(0)
-        seq     = feat_df.iloc[-SEQ_LEN:].values.astype(np.float32)
+        feat_df  = compute_features(df, utc_hour).fillna(0)
+        seq_raw  = feat_df.iloc[-SEQ_LEN:].values.astype(np.float32)
+        try:
+            seq = self.scaler.transform(seq_raw)
+        except Exception:
+            seq = seq_raw
         xt      = torch.tensor(seq[np.newaxis, :, :], dtype=torch.float32).to(DEVICE)
 
         # Enable dropout at inference
@@ -287,6 +306,7 @@ class DeepPredictor:
             joblib.dump({
                 "input_size": self.input_size,
                 "accuracy":   self.accuracy_map,
+                "scaler":     self.scaler,
             }, self._meta_path())
         except Exception as e:
             log.error("Deep save error: %s", e)
@@ -297,8 +317,10 @@ class DeepPredictor:
             return
         try:
             meta = joblib.load(meta_p)
-            self.input_size  = meta["input_size"]
+            self.input_size   = meta["input_size"]
             self.accuracy_map = meta.get("accuracy", {})
+            if "scaler" in meta:
+                self.scaler = meta["scaler"]
             n_feat = self.input_size
             model_ctors: dict[str, type] = {
                 "lstm": LSTMGRUModel, "cnn": CNNLSTMModel,

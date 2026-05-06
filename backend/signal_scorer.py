@@ -1,4 +1,12 @@
-"""4-Layer Signal Scoring System → confidence + grade."""
+"""4-Layer Signal Scoring System → confidence + grade.
+
+Plan layers (Master Plan v6.0):
+  Layer 1 — MTF Alignment        max 45 pts
+  Layer 2 — SMC/ICT context      max 30 pts (+ bonuses)
+  Layer 3 — Candle Reaction      max 25 pts (+ bonuses)
+  Layer 4 — AI Ensemble          max 30 pts (+ bonus)
+  FINAL = total / 130 (bonuses push above 1.0 before clamp)
+"""
 
 from config import GRADE_ELITE, GRADE_HIGH, GRADE_MODERATE
 
@@ -13,12 +21,9 @@ def score_to_confidence(
     kalman_agree: bool,
     kalman_vel:   float,
 ) -> float:
-    """
-    Combine 4 scoring layers into a final confidence [0, 1].
-    Max possible: 45 + 30 + 25 + 30 = 130 pts (generous headroom).
-    """
+    """Combine 4 scoring layers into a final confidence [0, 1]."""
     raw_total = mtf_pts + smc_pts + reaction_pts + ai_pts
-    max_pts   = 130.0
+    max_pts   = 130.0  # baseline sum of all 4 layers; bonuses push above
 
     confidence = raw_total / max_pts
 
@@ -26,15 +31,12 @@ def score_to_confidence(
     if meta_pass:
         confidence += 0.04
 
-    # Choppy market penalty
+    # ADX choppy-market penalty applied once here (main.py adds NO second pass)
     if adx < 15:
-        confidence *= 0.55
+        confidence *= 0.75
 
-    # Kalman noise filter
-    if kalman_vel < 1e-5:
-        confidence *= 0.70
-
-    # Kalman trend agreement
+    # Kalman trend agreement (velocity penalty removed — threshold 1e-5 is
+    # sub-pip scale and fires on every forex signal in quiet markets)
     if kalman_agree:
         confidence += 0.02
     else:
@@ -50,62 +52,177 @@ def smc_score_pts(
     harmonics: dict[str, int],
     sd: dict[str, float],
     elliott: dict[str, float],
+    direction: str = "GREEN",
+    chart_patterns: dict[str, float] | None = None,
 ) -> float:
-    """SMC/ICT context layer (max ~30 pts, bonuses allowed)."""
+    """SMC/ICT context layer (max ~30 pts, bonuses allowed). Direction-aware."""
     pts = 0.0
+    bull = direction == "GREEN"
 
-    if smc.get("price_at_bullish_ob") or smc.get("price_at_bearish_ob"):
+    # Order Blocks — aligned gives pts, opposing penalises
+    if bull and smc.get("price_at_bullish_ob"):
         pts += 10
-    if smc.get("price_in_bullish_fvg") or smc.get("price_in_bearish_fvg"):
+    elif not bull and smc.get("price_at_bearish_ob"):
+        pts += 10
+    elif bull and smc.get("price_at_bearish_ob"):
+        pts -= 5
+    elif not bull and smc.get("price_at_bullish_ob"):
+        pts -= 5
+
+    # FVG
+    if bull and smc.get("price_in_bullish_fvg"):
         pts += 8
-    if smc.get("bullish_bos") or smc.get("bearish_bos"):
+    elif not bull and smc.get("price_in_bearish_fvg"):
+        pts += 8
+    elif bull and smc.get("price_in_bearish_fvg"):
+        pts -= 3
+    elif not bull and smc.get("price_in_bullish_fvg"):
+        pts -= 3
+
+    # BOS
+    if bull and smc.get("bullish_bos"):
         pts += 7
-    if smc.get("in_ote_zone"):
+    elif not bull and smc.get("bearish_bos"):
+        pts += 7
+    elif bull and smc.get("bearish_bos"):
+        pts -= 4
+    elif not bull and smc.get("bullish_bos"):
+        pts -= 4
+
+    # OTE zone — direction-aware fields take priority
+    if bull and smc.get("in_ote_zone_bull"):
         pts += 5
-    if smc.get("sell_side_liquidity") or smc.get("buy_side_liquidity"):
+    elif not bull and smc.get("in_ote_zone_bear"):
         pts += 5
+    elif smc.get("in_ote_zone"):
+        pts += 3  # legacy fallback
+
+    # Liquidity (ICT: BSL above → bull pressure; SSL below → bear pressure)
+    if bull and smc.get("buy_side_liquidity"):          # BSL above → price runs UP
+        pts += 5
+    elif not bull and smc.get("sell_side_liquidity"):   # SSL below → price runs DOWN
+        pts += 5
+    # Directional sweep: SSL swept → reversal UP (+8); BSL swept → reversal DOWN (+8)
+    if bull and smc.get("liq_sweep_bull"):
+        pts += 8
+    elif not bull and smc.get("liq_sweep_bear"):
+        pts += 8
+    # Non-directional liquidity confirmation
     if smc.get("liquidity_swept"):
-        pts += 8
-    if inst.get("judas_swing_bull") or inst.get("judas_swing_bear"):
-        pts += 6
-    if inst.get("mm_bull_cycle") or inst.get("mm_bear_cycle"):
-        pts += 5
-    if wyckoff.get("wyckoff_spring") or wyckoff.get("wyckoff_upthrust"):
-        pts += 8
-    if wyckoff.get("wyckoff_sos") or wyckoff.get("wyckoff_sow"):
-        pts += 6
-    if inst.get("bullish_liquidity_sweep") or inst.get("bearish_liquidity_sweep"):
-        pts += 5  # VSA stopping volume proxy
-    if inst.get("displacement_bull") or inst.get("displacement_bear"):
         pts += 4
-    if any(v for v in harmonics.values()):
-        pts += 8
-    if sd.get("sd_zone_fresh") and (sd.get("sd_at_demand") or sd.get("sd_at_supply")):
+
+    # Institutional
+    if bull and (inst.get("judas_swing_bull") or inst.get("mm_bull_cycle")):
         pts += 6
-    if elliott.get("elliott_impulse_bull") or elliott.get("elliott_impulse_bear"):
+    elif not bull and (inst.get("judas_swing_bear") or inst.get("mm_bear_cycle")):
+        pts += 6
+    if bull and (inst.get("bullish_liquidity_sweep") or inst.get("displacement_bull")):
+        pts += 5
+    elif not bull and (inst.get("bearish_liquidity_sweep") or inst.get("displacement_bear")):
+        pts += 5
+
+    # Wyckoff
+    if bull and wyckoff.get("wyckoff_spring"):
+        pts += 8
+    elif not bull and wyckoff.get("wyckoff_upthrust"):
+        pts += 8
+    if bull and wyckoff.get("wyckoff_sos"):
+        pts += 6
+    elif not bull and wyckoff.get("wyckoff_sow"):
+        pts += 6
+
+    # Harmonics — direction aware
+    bull_harm = {"gartley_bull", "bat_bull", "butterfly_bull", "crab_bull"}
+    bear_harm = {"gartley_bear", "bat_bear", "butterfly_bear", "crab_bear"}
+    if bull and any(harmonics.get(p, 0) for p in bull_harm):
+        pts += 8
+    elif not bull and any(harmonics.get(p, 0) for p in bear_harm):
+        pts += 8
+
+    # S/D zones
+    if sd.get("sd_zone_fresh"):
+        if bull and sd.get("sd_at_demand"):
+            pts += 6
+        elif not bull and sd.get("sd_at_supply"):
+            pts += 6
+
+    # Elliott waves
+    if bull and elliott.get("elliott_impulse_bull"):
         pts += 7
+    elif not bull and elliott.get("elliott_impulse_bear"):
+        pts += 7
+
+    # Chart patterns
+    cp = chart_patterns or {}
+    if bull and cp.get("chart_double_bottom"):
+        pts += 8
+    elif not bull and cp.get("chart_double_top"):
+        pts += 8
+    if bull and cp.get("chart_bull_flag"):
+        pts += 5
+    elif not bull and cp.get("chart_bear_flag"):
+        pts += 5
+
+    # ── Pure Price Action (guide additions) ──────────────────
+    # HH+HL uptrend / LH+LL downtrend structure
+    if bull and smc.get("hh_hl_structure"):
+        pts += 5
+    elif not bull and smc.get("lh_ll_structure"):
+        pts += 5
+
+    # Role reversal retest (high-probability guide setup)
+    if bull and smc.get("role_reversal_bull"):
+        pts += 7
+    elif not bull and smc.get("role_reversal_bear"):
+        pts += 7
+
+    # Round number key level
+    if smc.get("round_number_near"):
+        pts += 4
+
+    # Momentum candles — directional, capped at 3 consecutive
+    if bull:
+        pts += min(int(smc.get("momentum_bull_count", 0)), 3) * 2
+    else:
+        pts += min(int(smc.get("momentum_bear_count", 0)), 3) * 2
+
+    # Real breakout confirmation
+    if bull and smc.get("breakout_real_bull"):
+        pts += 5
+    elif not bull and smc.get("breakout_real_bear"):
+        pts += 5
+
+    # Consolidation penalty — ranging market reduces SMC score
+    if smc.get("consolidation"):
+        pts *= 0.6
 
     return pts
 
 
-def reaction_score_pts(reaction: dict[str, float]) -> float:
-    """Candle reaction layer (max 25 + bonuses)."""
+def reaction_score_pts(reaction: dict[str, float], direction: str = "GREEN") -> float:
+    """Candle reaction layer (max 25 + bonuses). Direction-aware."""
     net = float(reaction.get("net_score", 0))
-    if net > 60:
+    # For RED signals, negate net so bearish reaction scores positively
+    aligned_net = net if direction == "GREEN" else -net
+
+    if aligned_net > 60:
         pts = 25.0
-    elif net > 40:
+    elif aligned_net > 40:
         pts = 20.0
-    elif net > 20:
+    elif aligned_net > 20:
         pts = 14.0
-    elif net > 0:
+    elif aligned_net > 0:
         pts = 8.0
     else:
         pts = 0.0
 
-    if reaction.get("pin_bar"):
-        pts += 5
-    if reaction.get("engulfing"):
-        pts += 6
+    # Direction-specific pattern bonuses
+    if direction == "GREEN":
+        if reaction.get("pin_bull"):   pts += 5
+        if reaction.get("bull_engulf"): pts += 6
+    else:
+        if reaction.get("pin_bear"):   pts += 5
+        if reaction.get("bear_engulf"): pts += 6
 
     return pts
 
@@ -141,8 +258,16 @@ def grade(confidence: float) -> str:
     return "SKIP"
 
 
-def consensus_check(feat: dict[str, float], direction: str) -> int:
-    """8-check consensus filter. Returns score 0-8."""
+def consensus_check(
+    feat: dict[str, object],
+    direction: str,
+    pattern_present: bool = False,
+) -> int:
+    """8-check consensus filter per plan. Returns score 0-8.
+
+    GREEN: RSI<65, MACD>0, BB<0.75, Stoch<80, EMA5>EMA20, ADX>20, Pattern✓, SMC✓
+    RED:   inverted thresholds.
+    """
     score = 0
     is_bull = direction == "GREEN"
 
@@ -163,7 +288,7 @@ def consensus_check(feat: dict[str, float], direction: str) -> int:
         score += int(ema5 > ema20)
         score += int(adx > 20)
         score += int(net > 0)
-        score += 1  # pattern placeholder
+        score += int(pattern_present)
     else:
         score += int(rsi14 > 35)
         score += int(macd_h < 0)
@@ -172,7 +297,7 @@ def consensus_check(feat: dict[str, float], direction: str) -> int:
         score += int(ema5 < ema20)
         score += int(adx > 20)
         score += int(net < 0)
-        score += 1
+        score += int(pattern_present)
 
     return score
 

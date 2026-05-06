@@ -5,19 +5,21 @@ import styles from "./App.module.css";
 
 import { useStore } from "./store/useStore";
 import { useWebSocket } from "./hooks/useWebSocket";
-import { CandleChart }       from "./components/CandleChart";
-import { SignalPanel }        from "./components/SignalPanel";
-import { ModelGrid }          from "./components/ModelGrid";
-import { PairSelector }       from "./components/PairSelector";
-import { TimeframeSelector }  from "./components/TimeframeSelector";
-import { WindowPanel }        from "./components/WindowPanel";
-import { TickerBar }          from "./components/TickerBar";
+import { CandleChart }              from "./components/CandleChart";
+import { SignalPanel }              from "./components/SignalPanel";
+import { ModelGrid }                from "./components/ModelGrid";
+import { PairSelector, formatPair } from "./components/PairSelector";
+import { TimeframeSelector }        from "./components/TimeframeSelector";
+import { WindowPanel }              from "./components/WindowPanel";
+import { SmcPanel }                 from "./components/SmcPanel";
+import { ReactionPanel }            from "./components/ReactionPanel";
+import { TickerBar }                from "./components/TickerBar";
 
 export function App() {
   const { connected, activePair, modelStatus } = useStore();
   useWebSocket();
 
-  const pairDisplay = activePair.replace("frx", "").replace("USDT", "/USDT");
+  const pairDisplay = formatPair(activePair);
 
   return (
     <div className={styles.root}>
@@ -25,7 +27,7 @@ export function App() {
       <header className={styles.header}>
         <div className={styles.logo}>
           <span className={styles.logoIcon}>⚡</span>
-          <span className={styles.logoText}>PLAYBIT AI</span>
+          <span className={styles.logoText}>Plybit Ai Signals</span>
         </div>
 
         <div className={styles.headerCenter}>
@@ -63,6 +65,12 @@ export function App() {
           </div>
           <div className={styles.windowWrap}>
             <WindowPanel />
+          </div>
+          <div className={styles.smcWrap}>
+            <SmcPanel />
+          </div>
+          <div className={styles.reactionWrap}>
+            <ReactionPanel />
           </div>
           <div className={styles.modelWrap}>
             <ModelGrid />
