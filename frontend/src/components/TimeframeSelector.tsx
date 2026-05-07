@@ -4,7 +4,7 @@ import { CandleTimer } from "./CandleTimer";
 import styles from "./TimeframeSelector.module.css";
 
 const PRIMARY_TFS:   [number, string][] = [[60,"1M"],[300,"5M"],[900,"15M"]];
-const SECONDARY_TFS: [number, string][] = [[120,"2M"],[3600,"1H"],[14400,"4H"]];
+const SECONDARY_TFS: [number, string][] = [[120,"2M"],[3600,"1H"],[14400,"4H"],[86400,"1D"]];
 
 export function TimeframeSelector() {
   const { activeTf, setTf, triggerRefresh, triggerSignalRefresh, clearSignal } = useStore();

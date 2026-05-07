@@ -131,10 +131,14 @@ async def initial_history_loader() -> None:
 async def load_history_for_pair(pair: str) -> None:
     for granularity in list(config.CANDLE_COUNT.keys()):
         try:
-            candles = await deriv_client.fetch_history(pair, granularity)
+            count = config.CANDLE_COUNT[granularity]
+            if count > 5000:
+                candles = await deriv_client.fetch_history_paginated(pair, granularity, count)
+            else:
+                candles = await deriv_client.fetch_history(pair, granularity)
             if candles:
                 candle_store[pair][granularity] = candles
-                log.debug("Loaded %d × %ds candles for %s", len(candles), granularity, pair)
+                log.info("Loaded %d × %ds candles for %s", len(candles), granularity, pair)
                 if granularity == 60 and len(candles) >= config.MIN_CANDLES:
                     asyncio.create_task(train_models_for_pair(pair))
         except Exception as e:
@@ -211,18 +215,22 @@ async def direct_deriv_listener() -> None:
                 await asyncio.sleep(30)
                 asyncio.create_task(direct_deriv_listener())
                 return
+            # Subscribe every pair × every granularity for live updates on all TFs
             for pair in config.FOREX_PAIRS:
-                await ws.send(json.dumps({
-                    "ticks_history": pair, "subscribe": 1,
-                    "end": "latest", "count": 1, "granularity": 60, "style": "candles",
-                }))
+                for gran in config.CANDLE_COUNT.keys():
+                    await ws.send(json.dumps({
+                        "ticks_history": pair, "subscribe": 1,
+                        "end": "latest", "count": 1, "granularity": gran, "style": "candles",
+                    }))
+                    await asyncio.sleep(0.05)  # respect Deriv rate limit
             while True:
                 # 90s timeout: if no message arrives the connection is frozen → reconnect
                 raw  = await asyncio.wait_for(ws.recv(), timeout=90)
                 data = json.loads(raw)
                 if "ohlc" in data:
-                    ohlc = data["ohlc"]
+                    ohlc     = data["ohlc"]
                     pair_sym = str(ohlc.get("symbol", ""))
+                    gran     = int(ohlc.get("granularity", 60))
                     candle   = {
                         "epoch":  float(ohlc["open_time"]),
                         "open":   float(ohlc["open"]),
@@ -231,7 +239,7 @@ async def direct_deriv_listener() -> None:
                         "close":  float(ohlc["close"]),
                         "closed": bool(ohlc.get("close_time", 0) < time.time()),
                     }
-                    await on_candle(pair_sym, 60, candle)
+                    await on_candle(pair_sym, gran, candle)
     except Exception as e:
         log.error("Direct Deriv listener error: %s — retrying in 5s", e)
         await asyncio.sleep(5)

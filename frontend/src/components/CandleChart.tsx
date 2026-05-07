@@ -73,7 +73,7 @@ export function CandleChart() {
       grid: { vertLines: { color: "rgba(255,255,255,0.03)" }, horzLines: { color: "rgba(255,255,255,0.03)" } },
       crosshair: { mode: CrosshairMode.Normal, vertLine: { width: 1, color: "rgba(0,180,255,0.4)", labelBackgroundColor: "#121d2e" }, horzLine: { width: 1, color: "rgba(0,180,255,0.4)", labelBackgroundColor: "#121d2e" } },
       rightPriceScale: { borderColor: "rgba(255,255,255,0.05)", scaleMargins: { top: 0.1, bottom: 0.1 } },
-      timeScale: { borderColor: "rgba(255,255,255,0.05)", timeVisible: true, secondsVisible: activeTf === 60, rightOffset: 5, barSpacing: 8, minBarSpacing: 2 },
+      timeScale: { borderColor: "rgba(255,255,255,0.05)", timeVisible: activeTf < 86400, secondsVisible: activeTf === 60, rightOffset: 5, barSpacing: 8, minBarSpacing: 2 },
       handleScroll: { mouseWheel: true, pressedMouseMove: true },
       handleScale:  { mouseWheel: true, pinch: true },
       width: containerRef.current.clientWidth,
@@ -140,6 +140,13 @@ export function CandleChart() {
   }, [candles, activeTf, activePair]);
 
   useEffect(() => { chartRef.current?.timeScale().scrollToRealTime(); }, [activePair, activeTf]);
+
+  // Update time axis options when TF changes (daily = no time labels, intraday = show time)
+  useEffect(() => {
+    chartRef.current?.applyOptions({
+      timeScale: { timeVisible: activeTf < 86400, secondsVisible: activeTf === 60 },
+    });
+  }, [activeTf]);
 
   useEffect(() => {
     if (!signal || signal.signal === "SKIP") return;

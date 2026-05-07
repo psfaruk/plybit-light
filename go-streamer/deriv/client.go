@@ -17,7 +17,7 @@ const wsURL = "wss://ws.binaryws.com/websockets/v3?app_id=%s"
 
 var (
 	appID = getEnv("DERIVE_APP_ID", "114229")
-	token = getEnv("DERIVE_TOKEN",  "e2hm1s0aGzXO83I")
+	token = getEnv("DERIVE_TOKEN",  "")
 )
 
 // ForexPairs lists all Deriv symbols to stream.
@@ -31,7 +31,7 @@ var ForexPairs = []string{
 }
 
 // Granularities to stream (seconds).
-var Granularities = []int{60, 120, 300, 900, 3600}
+var Granularities = []int{60, 120, 300, 900, 3600, 14400, 86400}
 
 type ohlcMsg struct {
 	MsgType string `json:"msg_type"`
