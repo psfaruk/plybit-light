@@ -64,6 +64,7 @@ regime_detectors:dict[str, RegimeDetector]   = {}
 window_selectors:dict[str, WindowSelector]   = {}
 loss_streak:     dict[str, int]              = {}
 ws_clients: set[WebSocket] = set()
+signal_cache: dict[str, dict[str, Any]] = {}  # latest signal per pair
 
 
 # ── Lifecycle ────────────────────────────────────────────────────────
@@ -104,6 +105,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(redis_subscriber())
     asyncio.create_task(news_refresher())
     asyncio.create_task(initial_history_loader())
+    asyncio.create_task(ws_heartbeat())
 
     yield
 
@@ -174,6 +176,16 @@ async def train_models_for_pair(pair: str) -> None:
     })
 
 
+# ── WebSocket Heartbeat ────────────────────────────────────────────────
+
+async def ws_heartbeat() -> None:
+    """Keep frontend connections alive and confirm backend is receiving data."""
+    while True:
+        await asyncio.sleep(20)
+        if ws_clients:
+            await broadcast({"type": "heartbeat", "ts": int(time.time())})
+
+
 # ── Redis Subscriber ──────────────────────────────────────────────────
 
 async def redis_subscriber() -> None:
@@ -215,14 +227,15 @@ async def direct_deriv_listener() -> None:
                 await asyncio.sleep(30)
                 asyncio.create_task(direct_deriv_listener())
                 return
-            # Subscribe every pair × every granularity for live updates on all TFs
+            # Subscribe only 1M per pair — 8 subscriptions, well within Deriv's limit.
+            # Higher TF candles are derived from 1M data via _resample_higher_tfs().
             for pair in config.FOREX_PAIRS:
-                for gran in config.CANDLE_COUNT.keys():
-                    await ws.send(json.dumps({
-                        "ticks_history": pair, "subscribe": 1,
-                        "end": "latest", "count": 1, "granularity": gran, "style": "candles",
-                    }))
-                    await asyncio.sleep(0.05)  # respect Deriv rate limit
+                await ws.send(json.dumps({
+                    "ticks_history": pair, "subscribe": 1,
+                    "end": "latest", "count": 1, "granularity": 60, "style": "candles",
+                }))
+                await asyncio.sleep(0.05)
+            log.info("Deriv: subscribed 1M for %d pairs", len(config.FOREX_PAIRS))
             while True:
                 # 90s timeout: if no message arrives the connection is frozen → reconnect
                 raw  = await asyncio.wait_for(ws.recv(), timeout=90)
@@ -230,7 +243,6 @@ async def direct_deriv_listener() -> None:
                 if "ohlc" in data:
                     ohlc     = data["ohlc"]
                     pair_sym = str(ohlc.get("symbol", ""))
-                    gran     = int(ohlc.get("granularity", 60))
                     candle   = {
                         "epoch":  float(ohlc["open_time"]),
                         "open":   float(ohlc["open"]),
@@ -239,7 +251,7 @@ async def direct_deriv_listener() -> None:
                         "close":  float(ohlc["close"]),
                         "closed": bool(ohlc.get("close_time", 0) < time.time()),
                     }
-                    await on_candle(pair_sym, gran, candle)
+                    await on_candle(pair_sym, 60, candle)
     except Exception as e:
         log.error("Direct Deriv listener error: %s — retrying in 5s", e)
         await asyncio.sleep(5)
@@ -278,6 +290,8 @@ async def on_candle(pair: str, granularity: int, candle: dict[str, Any]) -> None
 
 async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
     log.debug("1M close: %s @ %s", pair, closed_candle.get("epoch"))
+    # Derive higher TF live candles from 1M data so all chart TFs update in real time
+    asyncio.create_task(_resample_higher_tfs(pair))
     candles_1m = candle_store[pair].get(60, [])
     df_1m      = _candles_to_df(candles_1m)
     if len(df_1m) < config.MIN_CANDLES:
@@ -295,6 +309,7 @@ async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
     utc_minute = datetime.now(timezone.utc).minute
     signal = await _run_signal_pipeline(pair, df_1m, candle_dfs, utc_hour, utc_minute)
     if signal["grade"] != "SKIP":
+        signal_cache[pair] = {"pair": pair, **signal}
         ws_sel = window_selectors.get(pair)
         epoch  = int(closed_candle.get("epoch", time.time()))
         mtf    = signal.get("mtf_context", {})
@@ -312,6 +327,34 @@ async def on_1m_close(pair: str, closed_candle: dict[str, Any]) -> None:
         if tab and tab.should_retrain(1):
             asyncio.create_task(train_models_for_pair(pair))
         asyncio.create_task(send_signal_alert(signal, pair))
+
+
+async def _resample_higher_tfs(pair: str) -> None:
+    """Build higher-TF candles from 1M data and broadcast live updates."""
+    candles_1m = candle_store.get(pair, {}).get(60, [])
+    if not candles_1m:
+        return
+    now_epoch = candles_1m[-1]["epoch"]
+    for gran in [120, 300, 900, 3600, 14400]:
+        tf_open = int(now_epoch / gran) * gran
+        tf_slice = [c for c in candles_1m if c["epoch"] >= tf_open]
+        if not tf_slice:
+            continue
+        synthetic: dict[str, Any] = {
+            "epoch":  float(tf_open),
+            "open":   float(tf_slice[0]["open"]),
+            "high":   float(max(c["high"] for c in tf_slice)),
+            "low":    float(min(c["low"]  for c in tf_slice)),
+            "close":  float(tf_slice[-1]["close"]),
+            "closed": False,
+        }
+        # Update candle_store directly (skip on_candle to avoid recursion)
+        store = candle_store[pair].setdefault(gran, [])
+        if store and store[-1]["epoch"] == synthetic["epoch"]:
+            store[-1] = synthetic
+        else:
+            store.append(synthetic)
+        await broadcast({"type": "candle_update", "pair": pair, "granularity": gran, "candle": synthetic})
 
 
 async def _run_signal_pipeline(
@@ -603,6 +646,23 @@ async def get_pairs() -> dict[str, Any]:
 async def get_candles(pair: str, granularity: int = 60, count: int = 300) -> dict[str, Any]:
     candles = candle_store.get(pair, {}).get(granularity, [])
     return {"pair": pair, "granularity": granularity, "candles": candles[-count:] if count else candles}
+
+
+@app.get("/api/signal/{pair}")
+async def get_last_signal(pair: str) -> dict[str, Any]:
+    return {"signal": signal_cache.get(pair)}
+
+
+@app.get("/api/status")
+async def get_status() -> dict[str, Any]:
+    return {
+        "redis":      redis_client is not None,
+        "ws_clients": len(ws_clients),
+        "pairs": {
+            pair: {str(gran): len(cs) for gran, cs in grans.items()}
+            for pair, grans in candle_store.items()
+        },
+    }
 
 
 @app.get("/api/model/{pair}")
