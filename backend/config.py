@@ -2,7 +2,7 @@ import os
 
 # ── API Credentials ────────────────────────────────────────────
 DERIVE_APP_ID = os.getenv("DERIVE_APP_ID", "114229")
-DERIVE_TOKEN  = os.getenv("DERIVE_TOKEN",  "e2hm1s0aGzXO83I")
+DERIVE_TOKEN  = os.getenv("DERIVE_TOKEN",  "")
 REDIS_URL     = os.getenv("REDIS_URL",     "redis://localhost:6379")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")

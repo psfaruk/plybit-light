@@ -18,7 +18,7 @@ services:
       dockerfile: Dockerfile
     environment:
       DERIVE_APP_ID: ${DERIVE_APP_ID:-114229}
-      DERIVE_TOKEN: ${DERIVE_TOKEN:-e2hm1s0aGzXO83I}
+      DERIVE_TOKEN: ${DERIVE_TOKEN}
       REDIS_URL: redis:6379
     depends_on:
       redis:
@@ -34,7 +34,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       DERIVE_APP_ID: ${DERIVE_APP_ID:-114229}
-      DERIVE_TOKEN: ${DERIVE_TOKEN:-e2hm1s0aGzXO83I}
+      DERIVE_TOKEN: ${DERIVE_TOKEN}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
     depends_on:

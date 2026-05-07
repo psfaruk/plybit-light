@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,6 +21,21 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Health endpoint for Railway
+	go func() {
+		http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		})
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		if err := http.ListenAndServe(":"+port, nil); err != nil {
+			log.Printf("Health server error: %v", err)
+		}
+	}()
 
 	// News calendar refresher
 	news.StartRefresher(ctx)

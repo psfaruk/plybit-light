@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -49,14 +50,6 @@ import deriv as deriv_client
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("playbit")
 
-app = FastAPI(title="PLAYBIT AI", version="6.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # ── State ────────────────────────────────────────────────────────────
 
 redis_client: aioredis.Redis | None = None
@@ -75,8 +68,8 @@ ws_clients: set[WebSocket] = set()
 
 # ── Lifecycle ────────────────────────────────────────────────────────
 
-@app.on_event("startup")
-async def startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global redis_client
 
     # Clear stale model files when CLEAR_MODELS=true (set once in Railway env after label fix)
@@ -111,6 +104,17 @@ async def startup() -> None:
     asyncio.create_task(redis_subscriber())
     asyncio.create_task(news_refresher())
     asyncio.create_task(initial_history_loader())
+
+    yield
+
+
+app = FastAPI(title="PLAYBIT AI", version="6.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ── History Loading ───────────────────────────────────────────────────
