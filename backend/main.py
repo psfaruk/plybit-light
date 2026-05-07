@@ -205,7 +205,12 @@ async def direct_deriv_listener() -> None:
         # ping_interval keeps the TCP connection alive and detects silent freezes
         async with ws_lib.connect(url, ping_interval=20, ping_timeout=10) as ws:
             await ws.send(json.dumps({"authorize": config.DERIVE_TOKEN}))
-            await ws.recv()
+            auth = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+            if auth.get("error"):
+                log.error("Deriv auth failed: %s — check DERIVE_TOKEN env var", auth["error"])
+                await asyncio.sleep(30)
+                asyncio.create_task(direct_deriv_listener())
+                return
             for pair in config.FOREX_PAIRS:
                 await ws.send(json.dumps({
                     "ticks_history": pair, "subscribe": 1,
