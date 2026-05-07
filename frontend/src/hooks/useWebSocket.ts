@@ -8,6 +8,7 @@ const API_BASE = import.meta.env.VITE_API_URL ??
   `${location.protocol}//${location.host}`;
 
 const TICK_THROTTLE_MS = 50;
+const STALE_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes without candle_update = frozen
 
 export function useWebSocket() {
   const {
@@ -16,6 +17,7 @@ export function useWebSocket() {
     setSignal, setModelStatus, setBlockReason, addMarker,
   } = useStore();
   const ws = useRef<WebSocket | null>(null);
+  const staleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Tick throttle state — keyed by `${pair}_${granularity}`
   const lastTickRef    = useRef<Record<string, number>>({});
@@ -58,6 +60,16 @@ export function useWebSocket() {
     let active = true;
     let retryTimer: ReturnType<typeof setTimeout>;
 
+    function resetStaleTimer(socket: WebSocket) {
+      if (staleTimerRef.current) clearTimeout(staleTimerRef.current);
+      staleTimerRef.current = setTimeout(() => {
+        // No candle_update for 3 minutes while connected → force reconnect
+        if (active && socket.readyState === WebSocket.OPEN) {
+          socket.close();
+        }
+      }, STALE_TIMEOUT_MS);
+    }
+
     function connect() {
       if (!active) return;
 
@@ -68,9 +80,11 @@ export function useWebSocket() {
       socket.onopen = () => {
         if (!active) { socket.close(); return; }
         setConnected(true);
+        resetStaleTimer(socket);
       };
 
       socket.onclose = () => {
+        if (staleTimerRef.current) clearTimeout(staleTimerRef.current);
         setConnected(false);
         if (active) retryTimer = setTimeout(connect, 3000);
       };
@@ -136,6 +150,8 @@ export function useWebSocket() {
           const gran = (msg.granularity as number) ?? 60;
           const key  = `${activePair}_${gran}`;
           const now  = Date.now();
+          // Data is flowing — reset the stale-connection watchdog
+          if (ws.current) resetStaleTimer(ws.current);
           pendingTickRef.current[key] = { gran, candle: c };
           const last = lastTickRef.current[key] ?? 0;
           if (now - last >= TICK_THROTTLE_MS) {
@@ -188,6 +204,7 @@ export function useWebSocket() {
     return () => {
       active = false;
       clearTimeout(retryTimer);
+      if (staleTimerRef.current) clearTimeout(staleTimerRef.current);
       Object.values(tickTimerRef.current).forEach(clearTimeout);
       tickTimerRef.current = {};
       const current = ws.current;

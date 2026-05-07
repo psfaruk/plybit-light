@@ -202,16 +202,18 @@ async def direct_deriv_listener() -> None:
     import websockets as ws_lib
     url = f"wss://ws.binaryws.com/websockets/v3?app_id={config.DERIVE_APP_ID}"
     try:
-        async with ws_lib.connect(url) as ws:
+        # ping_interval keeps the TCP connection alive and detects silent freezes
+        async with ws_lib.connect(url, ping_interval=20, ping_timeout=10) as ws:
             await ws.send(json.dumps({"authorize": config.DERIVE_TOKEN}))
             await ws.recv()
-            for pair in config.FOREX_PAIRS[:5]:
+            for pair in config.FOREX_PAIRS:
                 await ws.send(json.dumps({
                     "ticks_history": pair, "subscribe": 1,
                     "end": "latest", "count": 1, "granularity": 60, "style": "candles",
                 }))
             while True:
-                raw  = await ws.recv()
+                # 90s timeout: if no message arrives the connection is frozen → reconnect
+                raw  = await asyncio.wait_for(ws.recv(), timeout=90)
                 data = json.loads(raw)
                 if "ohlc" in data:
                     ohlc = data["ohlc"]
