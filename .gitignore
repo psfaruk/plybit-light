@@ -23,3 +23,14 @@ backend/models/*.pt
 backend/models/*.h5
 backend/catboost_info/
 .claude/
+
+# Sensitive session tokens — never commit
+session.json
+backend/session.json
+
+# Regenerable local data
+backend/candles.db
+*.db-journal
+
+# Editor / process leftovers
+*.tmp.*
