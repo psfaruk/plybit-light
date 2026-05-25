@@ -47,12 +47,94 @@ export interface Signal {
   layers?: { mtf_pts: number; smc_pts: number; react_pts: number; ai_pts: number };
   window_plan?: Array<{ epoch: number; confidence: number; direction: string; grade: string }>;
   timestamp?: number;
+
+  /* ── New Engines (Rejection Zone, Volume Profile, Sentiment, Synthetic) ── */
+  rejection_zone?: {
+    rz_score:    number;
+    rz_grade:    "S" | "A" | "B" | "C" | "D";
+    rz_signal:   "GREEN" | "RED" | "NONE";
+    rz_touches:  number;
+    rz_growing:  boolean;
+    rz_side:     "BUYER" | "SELLER" | "NONE";
+  };
+  volume_profile?: {
+    vp_poc:             number;
+    vp_vah:             number;
+    vp_val:             number;
+    vp_zone:            "AT_POC" | "AT_RESISTANCE" | "AT_SUPPORT"
+                      | "LVN_FAST_MOVE" | "IN_VALUE_AREA"
+                      | "ABOVE_VALUE_AREA" | "BELOW_VALUE_AREA" | "NEUTRAL";
+    vp_hvn_resistance:  number;
+    vp_hvn_support:     number;
+    vp_at_poc:          boolean;
+  };
+  sentiment?: {
+    sent_mult:    number;
+    sent_align:   string;
+    buyer_ratio?: number;
+    extreme?:     string;
+    velocity?:    number;
+    reason?:      string;
+  };
+  order_flow?: {
+    os_total:     number;
+    os_buy_pct:   number;
+    os_imbalance: number;
+  };
+  synthetic_sentiment?: {
+    synth_buyer_ratio:   number;
+    synth_net_sentiment: number;
+    synth_exhaustion:    number;
+    synth_divergence:    "BULL" | "BEAR" | "NONE";
+    synth_seller_wick:   number;
+    synth_buyer_wick:    number;
+    synth_effort_imb:    number;
+    synth_signal_bias:   "GREEN" | "RED" | "NEUTRAL";
+    synth_mult:          number;
+    synth_align:         string;
+  };
+
+  /* ── Multi-Agent Consensus Engine ── */
+  multi_agent?: {
+    regime:        string;
+    conflict_score: number;
+    agreement:     number;
+    dir_changed:   boolean;
+    critique:      string[];
+    green_weight:  number;
+    red_weight:    number;
+    agent_report:  Record<string, {
+      direction:  string;
+      confidence: number;
+      score:      number;
+      reasons:    string[];
+      weight:     number;
+      win_rate:   number;
+      trades:     number;
+      data:       Record<string, unknown>;
+    }>;
+  };
 }
 
 export interface ModelStatus {
   is_trained: boolean;
   accuracy:   number;
   n_candles:  number;
+}
+
+export interface EngineSnapshot {
+  rejection_zone?:      Signal["rejection_zone"];
+  volume_profile?:      Signal["volume_profile"];
+  synthetic_sentiment?: Signal["synthetic_sentiment"];
+  sentiment?: {
+    buyer_ratio: number;
+    extreme:     string;
+    fresh:       boolean;
+  };
+  order_flow?:    Signal["order_flow"];
+  current_price?: number;
+  tick_age?:      number;   // seconds since last raw tick from Quotex
+  ts?:            number;
 }
 
 export interface SignalMarker {
@@ -102,6 +184,10 @@ interface PlaybitState {
   blockReason: string;
   setBlockReason: (r: string) => void;
 
+  /* Live engine state (per pair) — updated ~2 Hz from WebSocket */
+  liveEngine:    Record<string, EngineSnapshot>;
+  setLiveEngine: (pair: string, snap: EngineSnapshot) => void;
+
   /* Signal markers (all pairs/TFs, persisted 24h) */
   markers:        SignalMarker[];
   addMarker:      (m: SignalMarker) => void;
@@ -119,7 +205,7 @@ export const useStore = create<PlaybitState>((set, get) => ({
   connected:  false,
   setConnected: (v) => set({ connected: v }),
 
-  activePair: "frxEURUSD",
+  activePair: "EURUSD",
   activeTf:   60,
   setPair:    (p) => set({ activePair: p, candles: {}, signal: null, isLoading: true }),
   setTf:      (tf) => set({ activeTf: tf, isLoading: true }),
@@ -129,12 +215,22 @@ export const useStore = create<PlaybitState>((set, get) => ({
 
   candles:    {},
   addCandle:  (tf, c, closed) => set((state) => {
-    const existing = [...(state.candles[tf] ?? [])];
-    const idx      = existing.findIndex((x) => x.epoch === c.epoch);
-    if (idx >= 0) existing[idx] = c;
-    else          existing.push(c);
-    if (existing.length > 5000) existing.splice(0, existing.length - 5000);
-    return { candles: { ...state.candles, [tf]: existing }, livePrice: c.close };
+    const prev = state.candles[tf] ?? [];
+    const idx  = prev.findIndex((x) => x.epoch === c.epoch);
+
+    let next: Candle[];
+    if (idx >= 0) {
+      // Mutate in place — same array reference if only the last candle changed.
+      // This prevents non-active-TF updates from triggering CandleChart's effect.
+      const updated = [...prev];
+      updated[idx]  = c;
+      next = updated;
+    } else {
+      next = [...prev, c];
+    }
+    if (next.length > 5000) next = next.slice(-5000);
+
+    return { candles: { ...state.candles, [tf]: next }, livePrice: c.close };
   }),
   setHistory: (tf, cs) => set((state) => ({
     candles:   { ...state.candles, [tf]: cs },
@@ -157,6 +253,11 @@ export const useStore = create<PlaybitState>((set, get) => ({
 
   blockReason: "",
   setBlockReason: (r) => set({ blockReason: r }),
+
+  liveEngine: {},
+  setLiveEngine: (pair, snap) => set((state) => ({
+    liveEngine: { ...state.liveEngine, [pair]: snap },
+  })),
 
   markers: loadMarkers(),
   addMarker: (m) => set((state) => {

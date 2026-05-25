@@ -146,32 +146,44 @@ def _train_torch(
     epochs: int = 20,
     lr: float = 1e-3,
 ) -> float:
+    """Train model and return VALIDATION accuracy on held-out last 20%."""
+    split = max(int(len(X) * 0.80), 1)
+    X_train, X_val = X[:split], X[split:]
+    y_train, y_val = y[:split], y[split:]
+
     model.to(DEVICE)
     model.train()
-    Xt = torch.tensor(X, dtype=torch.float32)
-    yt = torch.tensor(y, dtype=torch.long)
+    Xt = torch.tensor(X_train, dtype=torch.float32)
+    yt = torch.tensor(y_train, dtype=torch.long)
     ds = TensorDataset(Xt, yt)
     dl = DataLoader(ds, batch_size=64, shuffle=False)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
-    last_acc  = 0.5
 
     for _ in range(epochs):
-        correct = 0; total = 0
         for xb, yb in dl:
             xb, yb = xb.to(DEVICE), yb.to(DEVICE)
             optimizer.zero_grad()
-            out  = model(xb)
-            loss = criterion(out, yb)
+            loss = criterion(model(xb), yb)
             loss.backward()
             optimizer.step()
-            preds    = out.argmax(dim=1)
-            correct += int((preds == yb).sum())
-            total   += len(yb)
-        last_acc = correct / (total + 1e-10)
 
-    return last_acc
+    # Evaluate on validation set
+    if len(X_val) == 0:
+        return 0.52
+    val_acc = _eval_accuracy(model, X_val, y_val)
+    return val_acc
+
+
+def _eval_accuracy(model: nn.Module, X: np.ndarray, y: np.ndarray) -> float:
+    model.eval()
+    model.to(DEVICE)
+    with torch.no_grad():
+        xt   = torch.tensor(X, dtype=torch.float32).to(DEVICE)
+        out  = model(xt)
+        preds = out.argmax(dim=1).cpu().numpy()
+    return float(np.mean(preds == y))
 
 
 def _predict_torch(model: nn.Module, x: np.ndarray) -> float:

@@ -53,14 +53,20 @@
   width: 8px; height: 8px;
   border-radius: 50%;
 }
-.live    { background: var(--green-neon); box-shadow: var(--shadow-green); animation: blink-dot 1.5s ease-in-out infinite; }
+.live         { background: var(--green-neon); box-shadow: var(--shadow-green); animation: blink-dot 1.5s ease-in-out infinite; }
+.laggy        { background: var(--gold-neon); box-shadow: 0 0 8px rgba(255,215,0,0.5); animation: blink-dot 0.8s ease-in-out infinite; }
+.reconnecting { background: var(--red-neon); box-shadow: 0 0 8px rgba(255,59,59,0.6); animation: blink-dot 0.4s ease-in-out infinite; }
 .offline { background: var(--muted); }
 .liveLabel {
   font-family:   var(--font-display);
   font-size:     9px;
   letter-spacing:1px;
   color:         var(--muted);
+  transition:    color 0.2s;
 }
+.liveLabel[data-quality="live"]         { color: var(--green-neon); }
+.liveLabel[data-quality="laggy"]        { color: var(--gold-neon); }
+.liveLabel[data-quality="reconnecting"] { color: var(--red-neon); }
 .accuracyBadge {
   font-family:   var(--font-data);
   font-size:     10px;
@@ -108,6 +114,7 @@
 .signalWrap   { flex-shrink: 0; }
 .windowWrap   { flex-shrink: 0; }
 .smcWrap      { flex-shrink: 0; }
+.engineWrap   { flex-shrink: 0; }
 .reactionWrap { flex-shrink: 0; }
 .modelWrap    { flex: 1; min-height: 0; overflow: hidden; }
 

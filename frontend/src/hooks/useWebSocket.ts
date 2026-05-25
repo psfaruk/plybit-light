@@ -7,13 +7,14 @@ const WS_BASE = import.meta.env.VITE_WS_URL ??
 const API_BASE = import.meta.env.VITE_API_URL ??
   `${location.protocol}//${location.host}`;
 
-const TICK_THROTTLE_MS = 50;
+const TICK_THROTTLE_MS = 16;  // ~60fps (matches backend broadcast rate)
 
 export function useWebSocket() {
   const {
     activePair, activeTf, refreshTick, signalRefreshTick,
     setConnected, addCandle, setHistory,
     setSignal, setModelStatus, setBlockReason, addMarker,
+    setLiveEngine,
   } = useStore();
   const ws = useRef<WebSocket | null>(null);
 
@@ -115,6 +116,13 @@ export function useWebSocket() {
             createdAt:  Date.now(),
           });
         }
+      }
+
+      // Engine updates — accept for ALL pairs so we keep state cached
+      if (msgType === "engine_update" && msgPair) {
+        const engine = msg.engine as Parameters<typeof setLiveEngine>[1] | undefined;
+        if (engine) setLiveEngine(msgPair, engine);
+        return;
       }
 
       // Pair-scoped messages — only for the chart we're viewing

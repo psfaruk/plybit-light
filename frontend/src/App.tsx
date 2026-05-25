@@ -13,13 +13,23 @@ import { TimeframeSelector }        from "./components/TimeframeSelector";
 import { WindowPanel }              from "./components/WindowPanel";
 import { SmcPanel }                 from "./components/SmcPanel";
 import { ReactionPanel }            from "./components/ReactionPanel";
+import { EnginePanel }              from "./components/EnginePanel";
 import { TickerBar }                from "./components/TickerBar";
 
 export function App() {
-  const { connected, activePair, modelStatus } = useStore();
+  const { connected, activePair, modelStatus, liveEngine } = useStore();
   useWebSocket();
 
   const pairDisplay = formatPair(activePair);
+
+  // Connection-quality badge: green LIVE if last tick < 5s, yellow LAGGY 5-15s,
+  // red RECONNECTING > 15s. `tick_age` arrives via engine_update every ~500ms.
+  const tickAge = liveEngine[activePair]?.tick_age ?? 999;
+  let dataQuality: "live" | "laggy" | "reconnecting";
+  let dataLabel:   string;
+  if (tickAge < 5)        { dataQuality = "live";         dataLabel = "LIVE"; }
+  else if (tickAge < 15)  { dataQuality = "laggy";        dataLabel = `LAGGY ${Math.round(tickAge)}s`; }
+  else                    { dataQuality = "reconnecting"; dataLabel = "RECONNECTING…"; }
 
   return (
     <div className={styles.root}>
@@ -36,8 +46,10 @@ export function App() {
         </div>
 
         <div className={styles.headerRight}>
-          <div className={`${styles.liveDot} ${connected ? styles.live : styles.offline}`} />
-          <span className={styles.liveLabel}>{connected ? "LIVE" : "CONNECTING…"}</span>
+          <div className={`${styles.liveDot} ${connected ? styles[dataQuality] : styles.offline}`} />
+          <span className={styles.liveLabel} data-quality={dataQuality}>
+            {connected ? dataLabel : "CONNECTING…"}
+          </span>
           {modelStatus.is_trained && (
             <span className={styles.accuracyBadge}>
               {Math.round(modelStatus.accuracy * 100)}% acc
@@ -68,6 +80,9 @@ export function App() {
           </div>
           <div className={styles.smcWrap}>
             <SmcPanel />
+          </div>
+          <div className={styles.engineWrap}>
+            <EnginePanel />
           </div>
           <div className={styles.reactionWrap}>
             <ReactionPanel />

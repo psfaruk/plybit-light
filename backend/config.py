@@ -1,23 +1,59 @@
 import os
+from pathlib import Path
+
+# Load .env from project root (parent of backend/) before reading env vars.
+# Without this, os.getenv returns empty when running via `uvicorn backend.main`
+# from a shell that hasn't exported them.
+try:
+    from dotenv import load_dotenv
+    _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+    if _ENV_PATH.exists():
+        load_dotenv(_ENV_PATH, override=True)
+except ImportError:
+    # Fallback: manual .env parser (no python-dotenv installed)
+    _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+    if _ENV_PATH.exists():
+        for _line in _ENV_PATH.read_text(encoding="utf-8").splitlines():
+            _line = _line.strip()
+            if not _line or _line.startswith("#") or "=" not in _line:
+                continue
+            _k, _, _v = _line.partition("=")
+            _k = _k.strip()
+            _v = _v.strip().strip('"').strip("'")
+            os.environ.setdefault(_k, _v)
 
 # ── API Credentials ────────────────────────────────────────────
-DERIVE_APP_ID = os.getenv("DERIVE_APP_ID", "114229")
-DERIVE_TOKEN  = os.getenv("DERIVE_TOKEN",  "e2hm1s0aGzXO83I")
-REDIS_URL     = os.getenv("REDIS_URL",     "redis://localhost:6379")
+DERIV_TOKEN  = os.getenv("DERIV_TOKEN",  "")
+DERIV_APP_ID = os.getenv("DERIV_APP_ID", "")
+if not DERIV_TOKEN or not DERIV_APP_ID:
+    import logging as _l
+    _l.getLogger(__name__).warning(
+        "DERIV_TOKEN or DERIV_APP_ID not set — "
+        "add them to .env or the live listener will fail."
+    )
+
+# Quotex credentials — consumed by backend/quotex.py. Used only when main.py
+# is switched to `import quotex as quotex_client`. Either email+password OR a
+# pre-issued session token can be supplied; the connector prefers the token.
+QUOTEX_EMAIL         = os.getenv("QUOTEX_EMAIL",         "")
+QUOTEX_PASSWORD      = os.getenv("QUOTEX_PASSWORD",      "")
+QUOTEX_SESSION_TOKEN = os.getenv("QUOTEX_SESSION_TOKEN", "")
+
+REDIS_URL    = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "")
 
-# ── Pairs (8 Forex majors + Gold) ────────────────────────────────
+# ── Pairs (8 Forex majors + Gold) — Quotex naming ───────────────
 FOREX_PAIRS = [
-    "frxXAUUSD",   # XAU/USD (Gold)
-    "frxEURUSD",   # EUR/USD
-    "frxGBPUSD",   # GBP/USD
-    "frxUSDJPY",   # USD/JPY
-    "frxAUDUSD",   # AUD/USD
-    "frxUSDCAD",   # USD/CAD
-    "frxNZDUSD",   # NZD/USD
-    "frxUSDCHF",   # USD/CHF
+    "XAUUSD",   # XAU/USD (Gold)
+    "EURUSD",   # EUR/USD
+    "GBPUSD",   # GBP/USD
+    "USDJPY",   # USD/JPY
+    "AUDUSD",   # AUD/USD
+    "USDCAD",   # USD/CAD
+    "NZDUSD",   # NZD/USD
+    "USDCHF",   # USD/CHF
 ]
 
 # No index or crypto pairs — keeps training cycles focused per pair
@@ -25,18 +61,17 @@ ALL_PAIRS = list(FOREX_PAIRS)
 
 # ── Candle Counts ───────────────────────────────────────────────────
 
-# How many candles to DISPLAY on the chart (fetched via paginated Deriv API)
+# 5000 candles per pair per timeframe (stored in SQLite + in-memory)
 CHART_CANDLE_COUNT = {
-    60:    15000,   # 1M  → ~10 days  (3 paginated batches of 5000)
-    120:   10000,   # 2M  → ~14 days
-    300:   10000,   # 5M  → ~35 days
-    900:   8000,    # 15M → ~83 days
-    3600:  5000,    # 1H  → ~208 days
-    14400: 3000,    # 4H  → ~500 days
+    60:    5000,
+    120:   5000,
+    300:   5000,
+    900:   5000,
+    3600:  5000,
+    14400: 5000,
 }
 
 # How many candles the SIGNAL PIPELINE uses for fast analysis
-# (takes the most recent N from whatever is stored — keeps compute fast)
 ANALYSIS_CANDLE_COUNT = {
     60:    500,
     120:   300,
@@ -46,11 +81,11 @@ ANALYSIS_CANDLE_COUNT = {
     14400: 150,
 }
 
-# Legacy alias — used by old fetch_history() calls
+# Legacy alias
 CANDLE_COUNT = CHART_CANDLE_COUNT
 
 # In-memory ring buffer per pair/granularity
-HISTORY_COUNT = 20000
+HISTORY_COUNT = 6000
 
 # ── AI Training ──────────────────────────────────────────────────
 MIN_CANDLES   = 150
@@ -87,7 +122,7 @@ APP_TF_SECONDARY = [120, 3600, 14400]
 # ── Signal Quality ─────────────────────────────────────────────────────
 GRADE_ELITE    = float(os.getenv("GRADE_ELITE", "0.82"))  # 👑
 GRADE_HIGH     = float(os.getenv("GRADE_HIGH", "0.75"))   # ✅
-GRADE_MODERATE = float(os.getenv("GRADE_MODERATE", "0.45"))  # ⚡
+GRADE_MODERATE = float(os.getenv("GRADE_MODERATE", "0.62"))  # ⚡
 TELEGRAM_MIN_GRADE      = os.getenv("TELEGRAM_MIN_GRADE", "HIGH").upper()
 SIGNAL_THRESHOLD        = float(os.getenv("SIGNAL_THRESHOLD", str(GRADE_MODERATE)))
 SIGNAL_CONFIRM_REQUIRED = 8

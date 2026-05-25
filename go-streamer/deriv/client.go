@@ -16,8 +16,8 @@ import (
 const wsURL = "wss://ws.binaryws.com/websockets/v3?app_id=%s"
 
 var (
-	appID = getEnv("DERIVE_APP_ID", "114229")
-	token = getEnv("DERIVE_TOKEN",  "e2hm1s0aGzXO83I")
+	appID = getEnv("DERIV_APP_ID", "")
+	token = getEnv("DERIV_TOKEN",  "")
 )
 
 // ForexPairs lists all Deriv symbols to stream.

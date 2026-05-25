@@ -10,7 +10,6 @@ import joblib
 log = logging.getLogger(__name__)
 
 MODELS_DIR  = os.path.join(os.path.dirname(__file__), "models")
-STACK_PATH  = os.path.join(MODELS_DIR, "stacking.joblib")
 
 
 class StackingEnsemble:
@@ -20,7 +19,9 @@ class StackingEnsemble:
     Output: calibrated final probability.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, pair: str = "global") -> None:
+        self.pair   = pair
+        self._path  = os.path.join(MODELS_DIR, f"stacking_{pair}.joblib")
         self.meta: LogisticRegression | None = None
         self.scaler = StandardScaler()
         self.trained = False
@@ -63,13 +64,13 @@ class StackingEnsemble:
 
     def _save(self) -> None:
         os.makedirs(MODELS_DIR, exist_ok=True)
-        joblib.dump({"meta": self.meta, "scaler": self.scaler}, STACK_PATH)
+        joblib.dump({"meta": self.meta, "scaler": self.scaler}, self._path)
 
     def _load(self) -> None:
-        if not os.path.exists(STACK_PATH):
+        if not os.path.exists(self._path):
             return
         try:
-            data       = joblib.load(STACK_PATH)
+            data       = joblib.load(self._path)
             self.meta  = data["meta"]
             self.scaler= data["scaler"]
             self.trained = True

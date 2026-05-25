@@ -18,12 +18,20 @@ def compute_candle_score(
     position_idx: int,
     reaction_net: float,
     ai_confidence: float,
+    direction: str = "GREEN",
 ) -> float:
+    """
+    Direction-aware score.
+    `reaction_net` is bullish-positive in our convention (positive = bullish).
+    For a RED signal, a bearish reaction (negative net) is GOOD — flip the sign
+    so RED signals get credit for bearish confluence.
+    """
     pos_score = POSITION_SCORES.get(position_idx, 0.0)
+    reaction_aligned = reaction_net if direction == "GREEN" else -reaction_net
     score = (
         mtf_agreement    * 0.40 * 100 +
         pos_score        * 0.20 +
-        reaction_net     * 0.25 +
+        reaction_aligned * 0.25 +
         ai_confidence    * 0.15 * 100
     )
     return score
@@ -60,7 +68,7 @@ class WindowSelector:
         if confidence < GRADE_MODERATE:
             return False
 
-        score = compute_candle_score(mtf_agreement, pos_idx, reaction_net, confidence)
+        score = compute_candle_score(mtf_agreement, pos_idx, reaction_net, confidence, direction)
 
         if len(self._window_signals) >= MAX_SIGNALS_PER_WINDOW:
             # Replace lowest-score signal if new one is better

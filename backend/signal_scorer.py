@@ -305,6 +305,9 @@ def consensus_check(
 def apply_consensus_penalty(confidence: float, consensus_score: int) -> float:
     if consensus_score >= 7:
         return min(confidence + 0.04, 1.0)
-    if consensus_score < 5:
-        return confidence * (0.5 + 0.5 * consensus_score / 5)
-    return confidence
+    if consensus_score >= 5:
+        return confidence
+    # Mild linear penalty: each missing point below 5 costs ~4%
+    # score=4: ×0.96, score=3: ×0.92, score=2: ×0.88, score=1: ×0.84, score=0: ×0.80
+    penalty = 1.0 - (5 - consensus_score) * 0.04
+    return confidence * max(penalty, 0.75)

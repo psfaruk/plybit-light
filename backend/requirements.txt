@@ -32,3 +32,9 @@ aiogram==3.6.0
 
 # ── Technical analysis ────────────────────────────────────────
 ta==0.11.0
+
+# ── Quotex (optional broker connector) ────────────────────────
+# Only required when backend/main.py is switched from `import deriv` to
+# `import quotex`. Install from git as pyquotex is not on PyPI:
+#   pip install git+https://github.com/cleitonleonel/pyquotex.git
+# pyquotex @ git+https://github.com/cleitonleonel/pyquotex.git

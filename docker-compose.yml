@@ -1,29 +1,35 @@
 version: "3.9"
 
-services:
-  redis:
-    image: redis:7-alpine
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+# Note: the `redis` and `go-streamer` services are disabled. The Go streamer
+# publishes Deriv ticks to Redis, but no Python consumer subscribes — the
+# backend opens its own Deriv WebSocket directly via backend/deriv.py.
+# Running them just wastes resources. Re-enable if a Redis-fanout architecture
+# is reintroduced (see backend/main.py "# ── Redis Subscriber ──" stub).
 
-  go-streamer:
-    build:
-      context: ./go-streamer
-      dockerfile: Dockerfile
-    environment:
-      DERIVE_APP_ID: ${DERIVE_APP_ID:-114229}
-      DERIVE_TOKEN: ${DERIVE_TOKEN:-e2hm1s0aGzXO83I}
-      REDIS_URL: redis:6379
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: on-failure
+services:
+  # redis:
+  #   image: redis:7-alpine
+  #   command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+  #   ports:
+  #     - "6379:6379"
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 5
+
+  # go-streamer:
+  #   build:
+  #     context: ./go-streamer
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     DERIV_APP_ID: ${DERIV_APP_ID}
+  #     DERIV_TOKEN: ${DERIV_TOKEN}
+  #     REDIS_URL: redis:6379
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #   restart: on-failure
 
   python-backend:
     build:
@@ -32,14 +38,10 @@ services:
     ports:
       - "8003:8003"
     environment:
-      REDIS_URL: redis://redis:6379
-      DERIVE_APP_ID: ${DERIVE_APP_ID:-114229}
-      DERIVE_TOKEN: ${DERIVE_TOKEN:-e2hm1s0aGzXO83I}
+      DERIV_APP_ID: ${DERIV_APP_ID}
+      DERIV_TOKEN: ${DERIV_TOKEN}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
-    depends_on:
-      redis:
-        condition: service_healthy
     restart: on-failure
     volumes:
       - ./backend/models:/app/models
@@ -48,6 +50,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    environment:
+      BACKEND_URL: http://python-backend:8003
     ports:
       - "3000:80"
     depends_on:

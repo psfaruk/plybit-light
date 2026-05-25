@@ -2,24 +2,24 @@ import { useStore } from "../store/useStore";
 import styles from "./PairSelector.module.css";
 
 const FOREX_PAIRS = [
-  "frxXAUUSD",   // XAU/USD (Gold)
-  "frxEURUSD",   // EUR/USD
-  "frxGBPUSD",   // GBP/USD
-  "frxUSDJPY",   // USD/JPY
-  "frxAUDUSD",   // AUD/USD
-  "frxUSDCAD",   // USD/CAD
-  "frxNZDUSD",   // NZD/USD
-  "frxUSDCHF",   // USD/CHF
+  "XAUUSD",   // XAU/USD (Gold)
+  "EURUSD",   // EUR/USD
+  "GBPUSD",   // GBP/USD
+  "USDJPY",   // USD/JPY
+  "AUDUSD",   // AUD/USD
+  "USDCAD",   // USD/CAD
+  "NZDUSD",   // NZD/USD
+  "USDCHF",   // USD/CHF
 ];
 
 export function formatPair(p: string): string {
-  // frxEURUSD → EUR/USD, frxXAUUSD → XAU/USD
-  if (p.startsWith("frx")) {
-    const clean = p.replace("frx", "");
-    if (clean.length === 6) return `${clean.slice(0, 3)}/${clean.slice(3)}`;
-    return clean;
-  }
-  return p;
+  // Handle OTC pairs: EURUSD_otc → EUR/USD (OTC)
+  const base = p.replace("_otc", "");
+  const isOtc = p.endsWith("_otc");
+  const label = base.length === 6
+    ? `${base.slice(0, 3)}/${base.slice(3)}`
+    : base;
+  return isOtc ? `${label} (OTC)` : label;
 }
 
 export function PairSelector() {
