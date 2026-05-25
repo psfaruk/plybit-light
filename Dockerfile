@@ -4,8 +4,6 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ .
-ARG VITE_WS_URL=""
-ENV VITE_WS_URL=$VITE_WS_URL
 RUN npm run build
 
 # Stage 2 — Python backend + bundled frontend

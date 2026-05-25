@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "../store/useStore";
 
-const WS_BASE = import.meta.env.VITE_WS_URL ??
+const WS_BASE = import.meta.env.VITE_WS_URL ||
   `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
 
 const API_BASE = import.meta.env.VITE_API_URL ??
